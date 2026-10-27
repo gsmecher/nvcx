@@ -114,6 +114,26 @@ them went:
     $ TCLLIBPATH=$(pkg-config --variable=tcldir nvcx) nvc ... --do script.tcl
     $ nvc ... -r --load $(pkg-config --variable=plugin nvcx) top
 
+### With cocotb
+
+cocotb's VHPI library and the nvcx plugin can be loaded into the same NVC run.
+NVC 1.23 keeps only the last `--load` option, so give both plugins in one
+comma-separated `--load`:
+
+    $ nvc ... --load $COCOTB_VHPI_LIB,$(pkg-config --variable=plugin nvcx) -r top
+
+`$COCOTB_VHPI_LIB` is the path of cocotb's NVC VHPI library
+(`cocotb-config --lib-name-path vhpi nvc`). Either order works.
+
+cocotb schedules in femtoseconds, while xsim's default VHDL time resolution is
+1 ps. A write that lands between two picoseconds is rejected with "NVC time …
+fs is not a multiple of the kernel's … fs tick". Elaborate the xsim snapshot at
+1 fs to avoid it, as `bench/neorv32` does:
+
+    $ xelab --timeprecision_vhdl 1fs -dll ...
+    # or, with the Tcl flow:
+    nvcx::write_shell -component ... -library LIB -elab {-L LIB --timeprecision_vhdl 1fs}
+
 ## Build and test
 
 The test suite is Dockerized and is therefore fairly portable:
