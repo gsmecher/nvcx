@@ -72,8 +72,8 @@ architecture twin of {core} is
     end component;
 {signals}
 begin
-    x : {shell_name(core)} port map ({assoc("")});
-    n : entity native.{core} port map ({assoc("n_")});
+    twin_xsim : {shell_name(core)} port map ({assoc("")});
+    twin_native : entity native.{core} port map ({assoc("n_")});
 
     -- in every delta, after the initialisation
     process ({sens})

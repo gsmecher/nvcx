@@ -229,3 +229,178 @@ def test_chain(timing, nvc, build, bridge_env, designs, tmp_path_factory):
         designs,
         tmp_path_factory,
     )
+
+
+# A known xsim quirk, not the bridge's: when a port feeding an `after` delay
+# (yi <= a after t_ps * 1 ps) is written through XSI during the kernel's
+# initialisation, yi's zero-delay dependents (y <= yi, and on) never take
+# their initial values, staying 'U' until the transaction matures. Plain XSI
+# does it, without NVC. Hence tb_chain's SET_PS, by default after the cores
+# have initialised.
+@pytest.mark.xfail(
+    strict=True, reason="xsim: a delay written during init leaves dependents 'U'"
+)
+def test_chain_init(nvc, build, bridge_env, designs, tmp_path_factory):
+    run_twin(
+        "chain",
+        CHAIN,
+        "tb_chain",
+        {"T_PS": 1001, "T2_PS": 1001, "PULSES": "0", "SET_PS": 0},
+        "100ns",
+        nvc,
+        build,
+        bridge_env,
+        designs,
+        tmp_path_factory,
+    )
+
+
+@st.composite
+def clocks(draw, top=3000):
+    """A clock's period and the time of its first rising edge"""
+    period = draw(st.one_of(st.sampled_from([2, 3, 1000]), st.integers(2, top)))
+    phase = draw(times([period // 2, period], 2 * period))
+    return period, phase
+
+
+def csv(values):
+    return ",".join(map(str, values))
+
+
+CLKDIV = [
+    Port("clk", "in", "std_logic"),
+    Port("en", "in", "std_logic"),
+    Port("d", "in", "unsigned(7 downto 0)"),
+    Port("clk_d2", "out", "std_logic"),
+    Port("q_d2", "out", "unsigned(7 downto 0)"),
+    Port("q_g", "out", "unsigned(7 downto 0)"),
+    Port("q_x", "out", "unsigned(7 downto 0)"),
+]
+
+
+@st.composite
+def clkdiv_timing(draw):
+    period, phase = draw(clocks())
+    edges = [period // 2, period - period // 2, period]
+    en = draw(st.lists(times(edges, 6 * period), min_size=1, max_size=6))
+    d_t = draw(st.lists(times(edges, 3 * period), min_size=1, max_size=12))
+    d_v = draw(st.lists(st.integers(0, 255), min_size=len(d_t), max_size=len(d_t)))
+    return period, phase, en, d_t, d_v, draw(st.booleans())
+
+
+@given(timing=clkdiv_timing())
+@example(timing=(1000, 0, [1500, 3000], [0, 500, 1000], [1, 2, 3], False))
+@example(timing=(1000, 0, [0, 1000], [1000, 0, 1000, 500], [1, 2, 3, 4], True))
+def test_clkdiv(timing, nvc, build, bridge_env, designs, tmp_path_factory):
+    """Derived and gated clocks inside the core, data sampled on them and on
+    edges shared with the clock they come from, and the derived clock out
+    through NVC and data back in"""
+    period, phase, en, d_t, d_v, feedback = timing
+    run_twin(
+        "clkdiv",
+        CLKDIV,
+        "tb_clkdiv",
+        {
+            "CLK_PS": period,
+            "PHASE_PS": phase,
+            "EN_T": csv(en),
+            "D_T": csv(d_t),
+            "D_V": csv(d_v),
+            "FEEDBACK": str(feedback).lower(),
+        },
+        "1ms",
+        nvc,
+        build,
+        bridge_env,
+        designs,
+        tmp_path_factory,
+    )
+
+
+PULSESYNC = [
+    Port("clk_a", "in", "std_logic"),
+    Port("clk_b", "in", "std_logic"),
+    Port("p_a", "in", "std_logic"),
+    Port("busy_a", "out", "std_logic"),
+    Port("p_b", "out", "std_logic"),
+]
+
+
+@st.composite
+def pulsesync_timing(draw):
+    a = draw(clocks())
+    # the same clock as often as not: edges of both in the same delta
+    b = draw(st.one_of(st.just(a), clocks()))
+    edges = sorted({a[0], b[0], a[0] // 2, b[0] // 2})
+    p = draw(st.lists(times(edges, 4 * max(a[0], b[0])), min_size=1, max_size=8))
+    return a, b, p
+
+
+@given(timing=pulsesync_timing())
+@example(timing=((1000, 0), (1300, 0), [500, 1000]))
+@example(timing=((1000, 0), (1000, 0), [1000, 0, 3000]))
+def test_pulsesync(timing, nvc, build, bridge_env, designs, tmp_path_factory):
+    """A pulse synchroniser between two clock domains, their edges apart or
+    together"""
+    (a, a_ph), (b, b_ph), p = timing
+    run_twin(
+        "pulsesync",
+        PULSESYNC,
+        "tb_pulsesync",
+        {
+            "A_PS": a,
+            "A_PHASE_PS": a_ph,
+            "B_PS": b,
+            "B_PHASE_PS": b_ph,
+            "P_T": csv(p),
+        },
+        "1ms",
+        nvc,
+        build,
+        bridge_env,
+        designs,
+        tmp_path_factory,
+    )
+
+
+RING = [
+    Port("x", "in", "unsigned(7 downto 0)"),
+    Port("n", "in", "unsigned(7 downto 0)"),
+    Port("y", "out", "unsigned(7 downto 0)"),
+    Port("odd", "out", "std_logic"),
+]
+
+
+@st.composite
+def ring_timing(draw):
+    k = draw(st.integers(1, 4))
+    limits = draw(st.lists(st.integers(0, 255), min_size=k, max_size=k))
+    # 0: the next delta, in the middle of a chain or loop
+    inj = draw(st.lists(times([1, 2, 3, 4], 2000), min_size=1, max_size=8))
+    seeds = draw(st.lists(st.integers(0, 255), min_size=len(inj), max_size=len(inj)))
+    return k, limits, inj, seeds
+
+
+@given(timing=ring_timing())
+@example(timing=(2, [50, 60], [1000, 0, 1000], [3, 4, 5]))
+@example(timing=(1, [255], [1000, 0, 0, 0], [0, 0, 7, 0]))
+@example(timing=(4, [255, 255, 255, 255], [1000, 1000], [0, 0]))
+@example(timing=(1, [0], [0], [0]))
+@example(timing=(1, [0], [1, 0, 0], [0, 1, 0]))
+def test_ring(timing, nvc, build, bridge_env, designs, tmp_path_factory):
+    """Zero-delay chains through several cores, and loops through them and
+    NVC that run for hundreds of deltas within one time step, broken and
+    restarted in the middle"""
+    k, limits, inj, seeds = timing
+    run_twin(
+        "ring",
+        RING,
+        "tb_ring",
+        {"K": k, "LIMITS": csv(limits), "INJ_T": csv(inj), "SEEDS": csv(seeds)},
+        "1ms",
+        nvc,
+        build,
+        bridge_env,
+        designs,
+        tmp_path_factory,
+    )

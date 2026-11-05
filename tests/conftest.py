@@ -32,6 +32,9 @@ DESIGNS = {
     "pdelay": ("vhdl", "pdelay.vhd", "pdelay"),
     "rstsync": ("vhdl", "rstsync.vhd", "rstsync"),
     "chain": ("vhdl", "chain.vhd", "chain"),
+    "clkdiv": ("vhdl", "clkdiv.vhd", "clkdiv"),
+    "pulsesync": ("vhdl", "pulsesync.vhd", "pulsesync"),
+    "ring": ("vhdl", "ring.vhd", "ring"),
     # regressions (tests/test_regress.py)
     "strgen": ("vhdl", "strgen.vhd", "strgen"),
     "strgen_v": ("sv", "strgen.v", "strgen"),
