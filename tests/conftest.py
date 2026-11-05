@@ -28,6 +28,10 @@ DESIGNS = {
     "clkgen": ("vhdl", "clkgen.vhd", "clkgen"),
     "regcomb": ("vhdl", "regcomb.vhd", "regcomb"),
     "glitch": ("vhdl", "glitch.vhd", "glitch"),
+    # property-based (tests/test_fuzz.py)
+    "pdelay": ("vhdl", "pdelay.vhd", "pdelay"),
+    "rstsync": ("vhdl", "rstsync.vhd", "rstsync"),
+    "chain": ("vhdl", "chain.vhd", "chain"),
     # regressions (tests/test_regress.py)
     "strgen": ("vhdl", "strgen.vhd", "strgen"),
     "strgen_v": ("sv", "strgen.v", "strgen"),

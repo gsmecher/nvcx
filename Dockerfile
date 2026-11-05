@@ -24,6 +24,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
 		patch \
 		pkg-config \
 		python3 \
+		python3-hypothesis \
 		python3-pytest \
 		python3-pytest-xdist \
 		tcl8.6-dev \

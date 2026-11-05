@@ -14,6 +14,7 @@ class Core:
     name: str
     design: str
     library: str | None = None
+    ports: list = field(default_factory=list)  # twin.Port, for a twin
 
 
 @dataclass
@@ -37,6 +38,8 @@ class Case:
     before_run: object = (
         None  # before_run(tmp_path): tamper between nvcx.tcl and the run
     )
+    twin: bool = False  # each core as its twin (tests/twin.py), not bare
+    elab_args: list[str] = field(default_factory=list)  # e.g. the tb's generics
 
 
 def ports_in_vcd(tmp_path, r):
@@ -167,9 +170,26 @@ CASES = {
 def run_case(case, nvc, build, bridge_env, designs, tmp_path):
     """Run one Case through the bridge: the two NVC passes, nvcx.tcl between
     them, and the run itself, checking what the Case says to check."""
+    run = prepare_case(case, nvc, build, bridge_env, designs, tmp_path)
+    r = run(case.elab_args)
+    if case.check:
+        case.check(tmp_path, r)
+    return r
+
+
+def prepare_case(case, nvc, build, bridge_env, designs, tmp_path):
+    """Everything up to the run: the two NVC passes and nvcx.tcl between
+    them. Returns run(elab_args), which elaborates the top with those
+    arguments (its generics, say) and runs it, checking what the Case says
+    to check, so that a design prepared once runs many times."""
     from conftest import DESIGNS, RTL
+    import twin
 
     env = dict(bridge_env, NVCX_WORK=str(tmp_path / "work"))
+
+    def shell(c):
+        return twin.shell_name(c.name) if case.twin else c.name
+
     env["PATH"] = f"{Path(env['XILINX_VIVADO']) / 'bin'}:{env['PATH']}"
 
     # the design's NVC-side script: what xsim provides for each core
@@ -177,7 +197,7 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
     for c in case.cores:
         if c.library is None:
             calls.append(
-                f"nvcx::write_shell -component {c.name} -output {tmp_path / c.name}_shell.vhd"
+                f"nvcx::write_shell -component {shell(c)} -output {tmp_path / shell(c)}_shell.vhd"
                 f" -snapshot {designs(c.design)}"
             )
         else:
@@ -187,7 +207,7 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
                 f"{'vhdl2008' if lang == 'vhdl' else 'sv'} {c.library} {RTL / source}\n"
             )
             calls.append(
-                f"nvcx::write_shell -component {c.name} -output {tmp_path / c.name}_shell.vhd"
+                f"nvcx::write_shell -component {shell(c)} -output {tmp_path / shell(c)}_shell.vhd"
                 f" -library {c.library} -elab {{-prj {prj}}}"
             )
     script = tmp_path / "nvc.tcl"
@@ -208,6 +228,26 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
         f"--map=nvcx:{tmp_path / 'nvcx'}",
         f"--work=work:{tmp_path / 'work_lib'}",
     ]
+    # a twin's other half: the cores' RTL, simulated by NVC itself
+    twins = []
+    if case.twin:
+        native = tmp_path / "native_lib"
+        for c in case.cores:
+            subprocess.run(
+                [
+                    nvc,
+                    "--std=2008",
+                    f"--work=native:{native}",
+                    "-a",
+                    str(RTL / DESIGNS[c.design][1]),
+                ],
+                check=True,
+                cwd=tmp_path,
+            )
+            path = tmp_path / f"{c.name}_twin.vhd"
+            twin.write(c.name, c.ports, path)
+            twins.append(str(path))
+        common.insert(2, f"--map=native:{native}")
 
     def nvc_run(*args, **kw):
         return subprocess.run(
@@ -220,9 +260,9 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
         )
 
     # pass 1: the cores unbound
-    r = nvc_run("-a", *(str(TB / f) for f in case.sources), str(TB / case.tb))
+    r = nvc_run("-a", *twins, *(str(TB / f) for f in case.sources), str(TB / case.tb))
     assert r.returncode == 0, r.stdout + r.stderr
-    r = nvc_run("-e", case.top)
+    r = nvc_run("-e", *case.elab_args, case.top)
     assert r.returncode == 0, r.stdout + r.stderr
     r = nvc_run("--do", case.top, str(script))
     assert r.returncode == 0, r.stdout + r.stderr
@@ -230,17 +270,17 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
         assert text in r.stdout, (text, r.stdout + r.stderr)
     shells = sorted(tmp_path.glob("*_shell.vhd"))
     assert {s.name for s in shells} == {
-        f"{c.name}_shell.vhd" for c in case.cores
+        f"{shell(c)}_shell.vhd" for c in case.cores
     }, shells
     if case.before_run:
         case.before_run(tmp_path)
     # pass 2: the shells provide the entities
     r = nvc_run("-a", *map(str, shells))
     assert r.returncode == 0, r.stdout + r.stderr
-    r = nvc_run("-e", case.top)
-    assert r.returncode == 0, r.stdout + r.stderr
 
-    def run():
+    def run(elab_args):
+        r = nvc_run("-e", *elab_args, case.top)
+        assert r.returncode == 0, r.stdout + r.stderr
         r = nvc_run(
             "-r", "--load", plugin, f"--stop-time={case.stop}", *case.run_args, case.top
         )
@@ -257,13 +297,10 @@ def run_case(case, nvc, build, bridge_env, designs, tmp_path):
                 assert text not in out, (text, out)
             return r
         assert r.returncode == 0 and "PASS" in out, out
-        r.rerun = run
+        r.rerun = lambda: run(elab_args)
         return r
 
-    r = run()
-    if case.check:
-        case.check(tmp_path, r)
-    return r
+    return run
 
 
 def run_native(case, nvc, tmp_path):
