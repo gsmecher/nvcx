@@ -26,7 +26,9 @@ DOCKER_WORKDIR ?= $(patsubst $(NVCX_ROOT)%,/work%,$(CURDIR))
 DOCKER_BUILD = docker build -t $(IMAGE) -f $(NVCX_ROOT)/Dockerfile $(NVCX_ROOT)
 
 # Extra `docker run` options go in DOCKER_ARGS
-DOCKER_RUN = docker run --rm --network=host \
+# --init: a real init as PID 1, which reaps orphans and forwards signals, so
+# that an interrupted run tears down instead of leaving make spinning
+DOCKER_RUN = docker run --rm --init --network=host \
 	-u $(shell id -u):$(shell id -g) \
 	-v $(NVCX_ROOT):/work -w $(DOCKER_WORKDIR) \
 	-v $(XILINX_ROOT):$(XILINX_ROOT):ro \
