@@ -46,6 +46,8 @@ using namespace nvcx;
 
 namespace {
 
+struct Instance;
+
 struct Port {
     const Simulation::Port* xp; // the core's port, in XSI terms
     enum Kind {
@@ -58,6 +60,12 @@ struct Port {
     size_t bits;               // scalars on the VHPI side (1 unless LogicVec)
     vhpiHandleT handle;        // the shell's port of the same name
     std::vector<uint8_t> last; // last value crossed, to skip redundant deposits
+    // Per-step scratch, sized once so that a step does not allocate: the
+    // value in the core's layout, and (vectors) the VHPI side's elements
+    std::vector<uint8_t> raw;
+    std::vector<vhpiEnumT> enums;
+    Instance* owner = nullptr; // an input's instance, for its callback
+    bool dirty = false;        // an input listed in owner->changed
     const std::string& name() const {
         return xp->name;
     }
@@ -70,8 +78,9 @@ struct Instance {
     uint64_t fs_per_tick = 1;
     bool finished_reported = false;
     vhpiHandleT timeout = nullptr; // pending after-delay callback, if any
-    uint64_t timeout_fs = 0;       // the NVC time it fires at
+    uint64_t timeout_at = 0;       // ...and when it fires (fs)
     bool dirty = false;            // an input changed in this NVC delta
+    std::vector<Port*> changed;    // ...namely these
     bool due = false;              // the kernel's next event is at this time
     bool active = false;           // listed in g_active
 };
@@ -156,6 +165,44 @@ std::string lower(std::string s) {
     return s;
 }
 
+// std_logic ordinals (LOGIC_CHARS: U X 0 1 Z W L H -) to XSI's Verilog
+// words, element 0 being the most significant bit: 'L' is 0, 'H' is 1, 'Z' is
+// Z, and anything else X, as logic_to_vlog.
+void enums_to_vlog(const vhpiEnumT* e, size_t nbits, uint8_t* raw) {
+    std::memset(raw, 0, (nbits + 31) / 32 * sizeof(VlogLogicVal));
+    auto* w = reinterpret_cast<VlogLogicVal*>(raw);
+    for (size_t i = 0; i < nbits; i++) {
+        bool a, b;
+        switch (e[nbits - 1 - i]) {
+        case vhpi0:
+        case vhpiL:
+            a = 0, b = 0;
+            break;
+        case vhpi1:
+        case vhpiH:
+            a = 1, b = 0;
+            break;
+        case vhpiZ:
+            a = 0, b = 1;
+            break;
+        default:
+            a = 1, b = 1;
+        }
+        w[i / 32].aVal |= (uint32_t)a << (i % 32);
+        w[i / 32].bVal |= (uint32_t)b << (i % 32);
+    }
+}
+
+// ...and back: '0', '1', 'Z' or 'X', as vlog_to_logic
+void vlog_to_enums(const uint8_t* raw, size_t nbits, vhpiEnumT* e) {
+    const auto* w = reinterpret_cast<const VlogLogicVal*>(raw);
+    for (size_t i = 0; i < nbits; i++) {
+        bool a = (w[i / 32].aVal >> (i % 32)) & 1;
+        bool b = (w[i / 32].bVal >> (i % 32)) & 1;
+        e[nbits - 1 - i] = b ? (a ? vhpiX : vhpiZ) : (a ? vhpi1 : vhpi0);
+    }
+}
+
 // The shell port's natural VHPI value format decides how values are read and
 // deposited; XSI's size for the core's port must match it.
 Port classify(const std::string& instance,
@@ -214,12 +261,16 @@ Port classify(const std::string& instance,
                          xp.size,
                          xp.vhdl ? "bytes" : "bits"));
     }
+    p.raw.resize(xp.raw_size());
+    if (p.kind == Port::LogicVec || p.kind == Port::Logic) {
+        p.enums.resize(p.bits);
+    }
     return p;
 }
 
-// Read the shell's port into the core's layout.
-std::vector<uint8_t> read_port(const Instance& in, const Port& p) {
-    std::vector<uint8_t> raw(p.xp->raw_size());
+// Read the shell's port into the core's layout, in p.raw.
+void read_port(const Instance& in, Port& p) {
+    uint8_t* raw = p.raw.data();
     vhpiValueT v{};
     if (p.kind == Port::Integer) {
         v.format = vhpiIntVal;
@@ -227,38 +278,30 @@ std::vector<uint8_t> read_port(const Instance& in, const Port& p) {
             fail(in.name + ": cannot read " + p.name());
         }
         int32_t x = (int32_t)v.value.intg;
-        std::memcpy(raw.data(), &x, 4);
+        std::memcpy(raw, &x, 4);
     } else if (p.kind == Port::Real) {
         v.format = vhpiRealVal;
         if (vhpi_get_value(p.handle, &v) != 0) {
             fail(in.name + ": cannot read " + p.name());
         }
         double x = v.value.real;
-        std::memcpy(raw.data(), &x, 8);
+        std::memcpy(raw, &x, 8);
     } else if (p.kind == Port::Enum || p.kind == Port::Logic) {
         v.format = p.kind == Port::Enum ? vhpiEnumVal : vhpiLogicVal;
         if (vhpi_get_value(p.handle, &v) != 0) {
             fail(in.name + ": cannot read " + p.name());
         }
-        uint8_t ordinal = (uint8_t)v.value.enumv;
         if (p.xp->vhdl) {
-            raw[0] = ordinal;
+            raw[0] = (uint8_t)v.value.enumv;
         } else {
-            logic_to_vlog(
-                std::string(1, ordinal < 9 ? LOGIC_CHARS[ordinal] : 'X'),
-                raw.data(),
-                1);
+            p.enums[0] = v.value.enumv;
+            enums_to_vlog(p.enums.data(), 1, raw);
         }
     } else {
+        // the size is fixed (classify), so one call reads it
         v.format = vhpiLogicVecVal;
-        v.bufSize = 0;
-        int need = vhpi_get_value(p.handle, &v);
-        if (need < 0) {
-            fail(in.name + ": cannot size " + p.name());
-        }
-        std::vector<vhpiEnumT> buf((size_t)need / sizeof(vhpiEnumT) + 1);
-        v.bufSize = (size_t)need;
-        v.value.enumvs = buf.data();
+        v.bufSize = p.bits * sizeof(vhpiEnumT);
+        v.value.enumvs = p.enums.data();
         if (vhpi_get_value(p.handle, &v) != 0) {
             fail(in.name + ": cannot read " + p.name());
         }
@@ -267,58 +310,48 @@ std::vector<uint8_t> read_port(const Instance& in, const Port& p) {
         }
         if (p.xp->vhdl) {
             for (size_t i = 0; i < p.bits; i++) {
-                raw[i] = (uint8_t)buf[i];
+                raw[i] = (uint8_t)p.enums[i];
             }
         } else {
-            std::string str(p.bits, 'X');
-            for (size_t i = 0; i < p.bits; i++) {
-                str[i] = buf[i] < 9 ? LOGIC_CHARS[buf[i]] : 'X';
-            }
-            logic_to_vlog(str, raw.data(), (unsigned)p.bits);
+            enums_to_vlog(p.enums.data(), p.bits, raw);
         }
     }
-    return raw;
 }
 
-// Deposit a value in the core's layout onto the shell's port (next delta,
-// like an assignment).
-void write_port(const Instance& in,
-                const Port& p,
-                const std::vector<uint8_t>& raw) {
+// Deposit p.raw, a value in the core's layout, onto the shell's port (next
+// delta, like an assignment).
+void write_port(const Instance& in, Port& p) {
+    const uint8_t* raw = p.raw.data();
     vhpiValueT v{};
-    std::vector<vhpiEnumT> buf;
     if (p.kind == Port::Integer) {
         int32_t x;
-        std::memcpy(&x, raw.data(), 4);
+        std::memcpy(&x, raw, 4);
         v.format = vhpiIntVal;
         v.value.intg = x;
     } else if (p.kind == Port::Real) {
         double x;
-        std::memcpy(&x, raw.data(), 8);
+        std::memcpy(&x, raw, 8);
         v.format = vhpiRealVal;
         v.value.real = x;
     } else if (p.kind == Port::Enum) {
         v.format = vhpiEnumVal;
         v.value.enumv = raw[0];
     } else {
-        std::string str = p.xp->vhdl
-                              ? std::string()
-                              : vlog_to_logic(raw.data(), (unsigned)p.bits);
-        buf.resize(p.bits);
-        for (size_t i = 0; i < p.bits; i++) {
-            buf[i] =
-                p.xp->vhdl
-                    ? raw[i]
-                    : (vhpiEnumT)(strchr(LOGIC_CHARS, str[i]) - LOGIC_CHARS);
+        if (p.xp->vhdl) {
+            for (size_t i = 0; i < p.bits; i++) {
+                p.enums[i] = raw[i];
+            }
+        } else {
+            vlog_to_enums(raw, p.bits, p.enums.data());
         }
         if (p.kind == Port::Logic) {
             v.format = vhpiLogicVal;
-            v.value.enumv = buf[0];
+            v.value.enumv = p.enums[0];
         } else {
             v.format = vhpiLogicVecVal;
-            v.bufSize = buf.size() * sizeof(vhpiEnumT);
-            v.numElems = (uint32_t)buf.size();
-            v.value.enumvs = buf.data();
+            v.bufSize = p.bits * sizeof(vhpiEnumT);
+            v.numElems = (uint32_t)p.bits;
+            v.value.enumvs = p.enums.data();
         }
     }
     if (vhpi_put_value(p.handle, &v, vhpiDepositPropagate) != 0) {
@@ -334,10 +367,18 @@ void on_timeout(const vhpiCbDataT* cb) {
     activate(in);
 }
 
-void on_input_change(const vhpiCbDataT* cb) {
-    Instance& in = *static_cast<Instance*>(cb->user_data);
+void mark_changed(Port& p) {
+    Instance& in = *p.owner;
+    if (!p.dirty) {
+        p.dirty = true;
+        in.changed.push_back(&p);
+    }
     in.dirty = true;
     activate(in);
+}
+
+void on_input_change(const vhpiCbDataT* cb) {
+    mark_changed(*static_cast<Port*>(cb->user_data));
 }
 
 // One kernel delta for every active instance; those still in the middle of
@@ -425,11 +466,10 @@ void check(Instance& in, const Simulation::RunResult& r) {
 bool deposit_outputs(Instance& in) {
     bool deposited = false;
     for (Port& p : in.outs) {
-        std::vector<uint8_t> raw(p.xp->raw_size());
-        in.sim->get(*p.xp, raw.data());
-        if (raw != p.last) {
-            write_port(in, p, raw);
-            p.last = raw;
+        in.sim->get(*p.xp, p.raw.data());
+        if (p.raw != p.last) {
+            write_port(in, p);
+            p.last = p.raw;
             deposited = true;
         }
     }
@@ -444,7 +484,7 @@ void on_next_time_step(const vhpiCbDataT*) {
     uint64_t now_fs = nvc_now_fs();
     for (auto& inst : g_instances) {
         Instance& in = *inst;
-        if (!in.timeout || in.timeout_fs != now_fs) {
+        if (!in.timeout || in.timeout_at != now_fs) {
             continue;
         }
         check(in, arrive(in));
@@ -462,20 +502,20 @@ bool step(Instance& in) {
     using Status = Simulation::RunStatus;
     Simulation::RunResult r = arrive(in);
     check(in, r);
-    // the inputs this delta changed, for the processes about to run (the
-    // value-change callbacks say whether there are any; reading them all
-    // through VHPI is the costly part of a step)
+    // the inputs this delta changed, for the processes about to run: only
+    // those whose value-change callbacks fired (reading through VHPI is the
+    // costly part of a step)
     bool changed = false;
-    if (in.dirty) {
-        for (Port& p : in.ins) {
-            std::vector<uint8_t> raw = read_port(in, p);
-            if (raw != p.last) {
-                d.put(*p.xp, raw.data());
-                p.last = raw;
-                changed = true;
-            }
+    for (Port* p : in.changed) {
+        p->dirty = false;
+        read_port(in, *p);
+        if (p->raw != p->last) {
+            d.put(*p->xp, p->raw.data());
+            p->last = p->raw;
+            changed = true;
         }
     }
+    in.changed.clear();
     in.dirty = false;
     in.due = false;
     // one delta: the processes, then the updates they schedule
@@ -489,18 +529,28 @@ bool step(Instance& in) {
     }
     check(in, r);
     bool deposited = deposit_outputs(in);
-    if (in.timeout) {
+    if (r.status == Status::Yielded) {
+        // more deltas at this time. A pending timeout stays: the kernel's
+        // next event is settled once it is quiescent, and should the timeout
+        // fire first, the step it causes finds nothing to do.
+        return deposited;
+    }
+    // quiescent: the kernel's next event becomes an after-delay callback.
+    // Registering one costs NVC a search of its handle table, so one already
+    // pending for that time is kept.
+    const uint64_t now_fs = nvc_now_fs();
+    uint64_t next;
+    const bool pending = d.next_event_time(next) && !d.finished();
+    const uint64_t next_at =
+        pending
+            ? now_fs + (next > d.time() ? next - d.time() : 1) * in.fs_per_tick
+            : 0;
+    if (in.timeout && !(pending && next_at == in.timeout_at)) {
         vhpi_remove_cb(in.timeout);
         in.timeout = nullptr;
     }
-    if (r.status == Status::Yielded) {
-        return deposited; // more deltas at this time
-    }
-    // quiescent: the kernel's next event becomes an after-delay callback
-    uint64_t next;
-    if (d.next_event_time(next) && !d.finished()) {
-        uint64_t delay_fs =
-            (next > d.time() ? next - d.time() : 1) * in.fs_per_tick;
+    if (pending && !in.timeout) {
+        uint64_t delay_fs = next_at - now_fs;
         vhpiTimeT t{.high = (int32_t)(delay_fs >> 32),
                     .low = (uint32_t)delay_fs};
         vhpiCbDataT cb{.reason = vhpiCbAfterDelay,
@@ -511,7 +561,7 @@ bool step(Instance& in) {
         if (!in.timeout) {
             fail(in.name + ": cannot register the after-delay callback");
         }
-        in.timeout_fs = nvc_now_fs() + delay_fs;
+        in.timeout_at = next_at;
     }
     return deposited;
 }
@@ -589,22 +639,31 @@ void exec_open(const vhpiCbDataT* cb) {
     }
     g_instances.push_back(std::move(inst));
     Instance& in = *g_instances.back();
+    // (in.ins is complete: the callbacks keep pointers into it)
     for (Port& p : in.ins) {
+        p.owner = &in;
         vhpiCbDataT change{.reason = vhpiCbValueChange,
                            .cb_rtn = on_input_change,
                            .obj = p.handle,
-                           .user_data = &in};
-        if (!vhpi_register_cb(&change, vhpiReturnCb)) {
+                           .user_data = &p};
+        vhpiHandleT h = vhpi_register_cb(&change, vhpiReturnCb);
+        if (!h) {
             fail(std::format(
                 "{}: cannot register the value-change callback on {}",
                 name,
                 p.name()));
         }
+        // the callback outlives its handle; kept, the handles of every
+        // input of every instance slow NVC's search for a free one
+        vhpi_release_handle(h);
     }
     // Initial values now: the cycle callbacks do not run during
     // initialization, and nothing on NVC's side can see the core until its
     // first delta, so its initialization runs on until an output changes.
-    in.dirty = true;
+    for (Port& p : in.ins) {
+        mark_changed(p);
+    }
+    in.dirty = true; // (a core without inputs too)
     activate(in);
     while (in.active && !step_active()) {
     }
