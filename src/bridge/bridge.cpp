@@ -83,12 +83,25 @@ struct Instance {
     std::vector<Port*> changed;    // ...namely these
     bool due = false;              // the kernel's next event is at this time
     bool active = false;           // listed in g_active
+    uint64_t eop_fs = UINT64_MAX;  // the NVC delta it was last stepped in
+    long eop_delta = -1;           // ...at the end of processes
+    // A pass's: whether this instance takes part, and what its kernel's delta
+    // left for the NVC side (see stage_run)
+    bool stepping = false;
+    bool arriving = false; // ...only to arrive at this time (see Pass)
+    Simulation::RunResult result{Simulation::RunStatus::Completed, ""};
+    std::vector<Port*> outs_changed;
+    bool next_pending = false; // the kernel has a next event, at next_at (fs)
+    uint64_t next_at = 0;
 };
 
 std::vector<std::unique_ptr<Instance>> g_instances;
 // the instances with something to do: an input changed, a timer fired, or
 // the kernel is in the middle of a time step
 std::vector<Instance*> g_active;
+// What a pass steps (Pass::active): it and g_active swap at each pass, so
+// that both keep their capacity rather than growing anew every pass
+std::vector<Instance*> g_stepping;
 
 void activate(Instance& in) {
     if (!in.active) {
@@ -96,8 +109,6 @@ void activate(Instance& in) {
         g_active.push_back(&in);
     }
 }
-
-bool step(Instance& in);
 
 [[noreturn]]
 void fail(const std::string& msg) {
@@ -381,15 +392,69 @@ void on_input_change(const vhpiCbDataT* cb) {
     mark_changed(*static_cast<Port*>(cb->user_data));
 }
 
-// One kernel delta for every active instance; those still in the middle of
-// the time step stay active. True if any output was deposited.
-bool step_active() {
-    std::vector<Instance*> active;
-    active.swap(g_active);
+// A pass: one kernel delta for every active instance; those still in the
+// middle of the time step stay active. It runs in three stages, each over
+// all the instances, so that NVC's side (VHPI) and the kernels' are not
+// interleaved instance by instance: read the changed inputs (stage_read), run
+// each kernel's delta (stage_run), then deposit the changed outputs
+// (stage_deposit). Nothing NVC can see changes during the pass: every
+// instance reads the values of the same NVC delta, and deposits only take
+// effect in the next one. So the stages, and the order of the instances,
+// change nothing but the order of the cores' reports.
+//
+// eop: the pass at the end of an NVC delta's process phase, at most one of
+// which may step a core in any NVC delta (see run_pass). arrive: the pass at
+// the start of a time step (on_next_time_step), over the instances in
+// active, whose kernels are only brought to this time.
+struct Pass {
+    std::vector<Instance*>& active = g_stepping; // one pass at a time
+    uint64_t now_fs = 0;
+    long delta = 0;
+    bool eop = false;
+    bool arrive = false;
+};
+
+void stage_read(Instance& in, uint64_t now_fs);
+void stage_run(Instance& in, uint64_t now_fs);
+bool stage_deposit(Instance& in, uint64_t now_fs);
+
+// True if any output was deposited
+bool run_pass(Pass& p) {
+    if (!p.arrive) {
+        p.active.clear();
+        p.active.swap(g_active);
+    }
+    vhpiTimeT now{};
+    vhpi_get_time(&now, &p.delta);
+    p.now_fs = ((uint64_t)(uint32_t)now.high << 32) | now.low;
+    for (Instance* in : p.active) {
+        if (!p.arrive) {
+            in->active = false;
+        }
+        in->arriving = p.arrive;
+        stage_read(*in, p.now_fs);
+        // Lockstep: a core gets one kernel delta per NVC delta. Passes that
+        // run while NVC has nothing pending (the last known delta, a core's
+        // initialization) step cores again in the same NVC delta, by design;
+        // two passes at the end of one NVC delta's processes never may.
+        if (p.eop && in->stepping) {
+            if (in->eop_fs == p.now_fs && in->eop_delta == p.delta) {
+                fail(std::format("{}: stepped twice in one NVC delta ({} fs, "
+                                 "delta {}): a bug in nvcx's scheduling",
+                                 in->name,
+                                 p.now_fs,
+                                 p.delta));
+            }
+            in->eop_fs = p.now_fs;
+            in->eop_delta = p.delta;
+        }
+    }
+    for (Instance* in : p.active) {
+        stage_run(*in, p.now_fs);
+    }
     bool deposited = false;
-    for (Instance* in : active) {
-        in->active = false;
-        deposited |= step(*in);
+    for (Instance* in : p.active) {
+        deposited |= stage_deposit(*in, p.now_fs);
         if (in->sim->suspended()) {
             activate(*in);
         }
@@ -397,9 +462,16 @@ bool step_active() {
     return deposited;
 }
 
-// At the end of each NVC delta's process phase
+bool step_active(bool eop = false) {
+    Pass p;
+    p.eop = eop;
+    return run_pass(p);
+}
+
+// At the end of each NVC delta's process phase: the delta's inputs, and its
+// value-change callbacks, which NVC runs among the processes, are all in
 void on_end_of_processes(const vhpiCbDataT*) {
-    step_active();
+    step_active(true);
 }
 
 // NVC has no delta pending at this time: the kernels still in the middle of
@@ -412,25 +484,41 @@ void on_last_known_delta(const vhpiCbDataT*) {
     }
 }
 
-// NVC's current time in femtoseconds
-uint64_t nvc_now_fs() {
+// At the start of each time step, before NVC's own signal updates: the
+// kernels whose next event is now are brought to this time, through their
+// first delta's signal updates, and the outputs those change are deposited
+// into NVC's update phase (see the header comment). Their processes wait for
+// the end of NVC's, in the usual pass.
+void on_next_time_step(const vhpiCbDataT*) {
     vhpiTimeT now{};
     vhpi_get_time(&now, nullptr);
-    return ((uint64_t)(uint32_t)now.high << 32) | now.low;
+    const uint64_t now_fs = ((uint64_t)(uint32_t)now.high << 32) | now.low;
+    Pass p;
+    p.arrive = true;
+    p.active.clear();
+    for (auto& inst : g_instances) {
+        if (inst->timeout && inst->timeout_at == now_fs) {
+            p.active.push_back(inst.get());
+        }
+    }
+    if (p.active.empty()) {
+        return;
+    }
+    run_pass(p);
+    for (Instance* in : p.active) {
+        in->due = true;
+        activate(*in);
+    }
 }
 
-// Bring a quiescent kernel to NVC's current time, paused after the signal
-// updates of its first delta here (its own events, if any) and before their
-// processes. A pause at an earlier time has nothing for NVC: nothing was
-// scheduled there. A suspended kernel is here already.
-Simulation::RunResult arrive(Instance& in) {
-    Simulation& d = *in.sim;
-    using Status = Simulation::RunStatus;
-    Simulation::RunResult r{Status::Completed, ""};
-    if (d.suspended()) {
-        return r;
+// Stage A (NVC): whether the instance has anything to do in this pass, and
+// the values of its changed inputs. in.changed keeps only the ports whose
+// value differs from the kernel's, with the new value in their last.
+void stage_read(Instance& in, uint64_t now_fs) {
+    in.stepping = in.arriving || in.dirty || in.due || in.sim->suspended();
+    if (!in.stepping) {
+        return;
     }
-    uint64_t now_fs = nvc_now_fs();
     if (now_fs % in.fs_per_tick != 0) {
         fail(std::format("{}: NVC time {} fs is not a multiple of the "
                          "kernel's {} fs tick; elaborate the core with a finer "
@@ -439,97 +527,104 @@ Simulation::RunResult arrive(Instance& in) {
                          now_fs,
                          in.fs_per_tick));
     }
-    uint64_t target = now_fs / in.fs_per_tick;
-    r = d.start(target > d.time() ? target - d.time() : 0);
-    while (r.status == Status::Yielded && d.time() < target) {
-        r = d.resume();
+    if (in.arriving) {
+        return; // the inputs wait for the usual pass
     }
-    return r;
+    // only the inputs whose value-change callbacks fired (reading through
+    // VHPI is the costly part)
+    size_t n = 0;
+    for (Port* p : in.changed) {
+        p->dirty = false;
+        read_port(in, *p);
+        if (p->raw != p->last) {
+            p->last = p->raw;
+            in.changed[n++] = p;
+        }
+    }
+    in.changed.resize(n);
+    in.dirty = false;
+    in.due = false;
 }
 
-// How a run ended: an error is fatal; a core's own end of simulation is
-// reported once.
-void check(Instance& in, const Simulation::RunResult& r) {
+// Stage B (the kernel): one delta, and what it leaves for NVC: the outputs
+// that changed, the run's status and, once quiescent, the next event.
+void stage_run(Instance& in, uint64_t now_fs) {
+    if (!in.stepping) {
+        return;
+    }
+    Simulation& d = *in.sim;
+    const uint64_t target = now_fs / in.fs_per_tick;
     using Status = Simulation::RunStatus;
+    Simulation::RunResult r{Status::Completed, ""};
+    // Bring the kernel to this time, paused after the signal updates of its
+    // first delta here (its own events) and before their processes. A pause
+    // at an earlier time has nothing for NVC: nothing was scheduled there.
+    if (!d.suspended()) {
+        r = d.start(target > d.time() ? target - d.time() : 0);
+        while (r.status == Status::Yielded && d.time() < target) {
+            r = d.resume();
+        }
+    }
+    if (r.status != Status::Error && !in.arriving) {
+        // the changed inputs, for the processes about to run
+        const bool changed = !in.changed.empty();
+        for (Port* p : in.changed) {
+            d.put(*p->xp, p->last.data());
+        }
+        in.changed.clear();
+        // one delta: the processes, then the updates they schedule
+        if (d.suspended()) {
+            r = d.resume();
+        } else if (changed) {
+            r = d.start(0);
+            if (r.status == Status::Yielded) {
+                r = d.resume();
+            }
+        }
+    }
     if (r.status == Status::Error) {
         fail(in.name + ": " + r.message);
     }
-    if (r.status == Status::Finished && !in.finished_reported) {
+    in.outs_changed.clear();
+    for (Port& p : in.outs) {
+        d.get(*p.xp, p.raw.data());
+        if (p.raw != p.last) {
+            p.last = p.raw;
+            in.outs_changed.push_back(&p);
+        }
+    }
+    uint64_t next;
+    in.next_pending =
+        r.status != Status::Yielded && d.next_event_time(next) && !d.finished();
+    if (in.next_pending) {
+        in.next_at =
+            now_fs + (next > d.time() ? next - d.time() : 1) * in.fs_per_tick;
+    }
+    in.result = std::move(r);
+}
+
+// Stage C (NVC): deposit the changed outputs (in their raw) and keep the
+// after-delay callback for the kernel's next event. True if anything was
+// deposited.
+bool stage_deposit(Instance& in, uint64_t now_fs) {
+    if (!in.stepping) {
+        return false;
+    }
+    in.stepping = false;
+    in.arriving = false;
+    using Status = Simulation::RunStatus;
+    if (in.result.status == Status::Finished && !in.finished_reported) {
         in.finished_reported = true;
         vhpi_printf("nvcx: %s: the core finished its simulation; its outputs "
                     "are frozen",
                     in.name.c_str());
     }
-}
-
-// Deposit the outputs that changed since they last crossed. True if any did.
-bool deposit_outputs(Instance& in) {
-    bool deposited = false;
-    for (Port& p : in.outs) {
-        in.sim->get(*p.xp, p.raw.data());
-        if (p.raw != p.last) {
-            write_port(in, p);
-            p.last = p.raw;
-            deposited = true;
-        }
+    const bool deposited = !in.outs_changed.empty();
+    for (Port* p : in.outs_changed) {
+        write_port(in, *p);
     }
-    return deposited;
-}
-
-// At the start of each time step, before NVC's own signal updates: the
-// kernels whose next event is now run their first delta's updates here, and
-// the outputs those change are deposited into NVC's update phase (see the
-// header comment). Their processes wait for the end of NVC's, in step().
-void on_next_time_step(const vhpiCbDataT*) {
-    uint64_t now_fs = nvc_now_fs();
-    for (auto& inst : g_instances) {
-        Instance& in = *inst;
-        if (!in.timeout || in.timeout_at != now_fs) {
-            continue;
-        }
-        check(in, arrive(in));
-        deposit_outputs(in);
-        in.due = true;
-        activate(in);
-    }
-}
-
-bool step(Instance& in) {
-    Simulation& d = *in.sim;
-    if (!in.dirty && !in.due && !d.suspended()) {
-        return false;
-    }
-    using Status = Simulation::RunStatus;
-    Simulation::RunResult r = arrive(in);
-    check(in, r);
-    // the inputs this delta changed, for the processes about to run: only
-    // those whose value-change callbacks fired (reading through VHPI is the
-    // costly part of a step)
-    bool changed = false;
-    for (Port* p : in.changed) {
-        p->dirty = false;
-        read_port(in, *p);
-        if (p->raw != p->last) {
-            d.put(*p->xp, p->raw.data());
-            p->last = p->raw;
-            changed = true;
-        }
-    }
-    in.changed.clear();
-    in.dirty = false;
-    in.due = false;
-    // one delta: the processes, then the updates they schedule
-    if (d.suspended()) {
-        r = d.resume();
-    } else if (changed) {
-        r = d.start(0);
-        if (r.status == Status::Yielded) {
-            r = d.resume();
-        }
-    }
-    check(in, r);
-    bool deposited = deposit_outputs(in);
-    if (r.status == Status::Yielded) {
+    in.outs_changed.clear();
+    if (in.result.status == Status::Yielded) {
         // more deltas at this time. A pending timeout stays: the kernel's
         // next event is settled once it is quiescent, and should the timeout
         // fire first, the step it causes finds nothing to do.
@@ -538,19 +633,12 @@ bool step(Instance& in) {
     // quiescent: the kernel's next event becomes an after-delay callback.
     // Registering one costs NVC a search of its handle table, so one already
     // pending for that time is kept.
-    const uint64_t now_fs = nvc_now_fs();
-    uint64_t next;
-    const bool pending = d.next_event_time(next) && !d.finished();
-    const uint64_t next_at =
-        pending
-            ? now_fs + (next > d.time() ? next - d.time() : 1) * in.fs_per_tick
-            : 0;
-    if (in.timeout && !(pending && next_at == in.timeout_at)) {
+    if (in.timeout && !(in.next_pending && in.next_at == in.timeout_at)) {
         vhpi_remove_cb(in.timeout);
         in.timeout = nullptr;
     }
-    if (pending && !in.timeout) {
-        uint64_t delay_fs = next_at - now_fs;
+    if (in.next_pending && !in.timeout) {
+        uint64_t delay_fs = in.next_at - now_fs;
         vhpiTimeT t{.high = (int32_t)(delay_fs >> 32),
                     .low = (uint32_t)delay_fs};
         vhpiCbDataT cb{.reason = vhpiCbAfterDelay,
@@ -561,7 +649,7 @@ bool step(Instance& in) {
         if (!in.timeout) {
             fail(in.name + ": cannot register the after-delay callback");
         }
-        in.timeout_at = next_at;
+        in.timeout_at = in.next_at;
     }
     return deposited;
 }
