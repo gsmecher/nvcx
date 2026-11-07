@@ -1,3 +1,10 @@
+## Unreleased
+
+- The bridge reaches cores through a backend-neutral interface
+  (`nvcx::Core`, `include/nvcx/core.hpp`); xsim (`src/xsim/`) is one
+  backend, chosen by what a snapshot directory holds. No change in
+  behaviour.
+
 ## Version 0.2.0 - 2026-10-26
 
 First release.

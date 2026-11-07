@@ -9,9 +9,10 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "nvcx/simulation.hpp"
+#include "nvcx/xsim/simulation.hpp"
 
 using namespace nvcx;
+using namespace nvcx::xsim;
 namespace fs = std::filesystem;
 
 #define CHECK(cond)                                                            \

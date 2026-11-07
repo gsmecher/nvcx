@@ -1,6 +1,6 @@
 #define _GNU_SOURCE 1
-#include "nvcx/kernel.hpp"
-#include "nvcx/vivado.hpp"
+#include "nvcx/xsim/kernel.hpp"
+#include "nvcx/xsim/vivado.hpp"
 #include <cxxabi.h>
 #include <dlfcn.h>
 #include <link.h>
@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 
-namespace nvcx {
+namespace nvcx::xsim {
 
 Kernel& Kernel::get() {
     static Kernel* kernel = new Kernel(load_closure().kernel.string());
@@ -116,10 +116,10 @@ bool Kernel::next_event_time(uint64_t& t) const {
         return false;
     const char* q = static_cast<const char*>(*globalEventQueue);
     const char* slot =
-        *reinterpret_cast<const char* const*>(q + nvcx::abi::LISTQ_HEAD);
+        *reinterpret_cast<const char* const*>(q + abi::LISTQ_HEAD);
     if (!slot)
         return false;
-    t = *reinterpret_cast<const uint64_t*>(slot + nvcx::abi::TIMESLOT_TIME);
+    t = *reinterpret_cast<const uint64_t*>(slot + abi::TIMESLOT_TIME);
     return true;
 }
 
@@ -183,4 +183,4 @@ void Kernel::discover_offsets() {
         }
 }
 
-} // namespace nvcx
+} // namespace nvcx::xsim

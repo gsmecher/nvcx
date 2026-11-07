@@ -1,4 +1,4 @@
-#include "nvcx/vivado.hpp"
+#include "nvcx/xsim/vivado.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -19,7 +19,7 @@
 
 namespace fs = std::filesystem;
 
-namespace nvcx {
+namespace nvcx::xsim {
 
 namespace {
 
@@ -301,4 +301,4 @@ const Closure& load_closure() {
     return *loaded;
 }
 
-} // namespace nvcx
+} // namespace nvcx::xsim

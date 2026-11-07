@@ -1,4 +1,4 @@
-#include "nvcx/simulation.hpp"
+#include "nvcx/xsim/simulation.hpp"
 
 #include <dlfcn.h>
 #include <boost/context/protected_fixedsize_stack.hpp>
@@ -13,7 +13,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace nvcx {
+namespace nvcx::xsim {
 
 namespace {
 
@@ -207,13 +207,6 @@ Simulation::~Simulation() {
         dlclose(design_handle_);
 }
 
-const Simulation::Port* Simulation::port(const std::string& name) const {
-    for (const Port& p : ports_)
-        if (p.name == name)
-            return &p;
-    return nullptr;
-}
-
 // The xsi_* calls on this design set its globals too; the ones that do not
 // (xsi_get_time), the kernel's globals read directly (status_kind,
 // next_event_time), and a run resumed in the middle of a time step rely on
@@ -270,31 +263,25 @@ void Simulation::emit_report(const std::string& raw) {
         msgs.push_back(m);
         pos = next == std::string::npos ? raw.size() : next + 1;
     }
-    for (const std::string& m : msgs) {
-        if (report_sink_) {
-            report_sink_(m);
-        } else {
-            fprintf(stdout, "%s\n", m.c_str());
-            fflush(stdout);
-        }
-    }
+    for (const std::string& m : msgs)
+        report(report_severity(m), report_text(m), m);
 }
 
-int Simulation::report_severity(const std::string& msg) {
+Core::Severity Simulation::report_severity(const std::string& msg) {
     if (msg.starts_with("Failure:") || msg.starts_with("Fatal:"))
-        return 3;
+        return Severity::Failure;
     if (msg.starts_with("Error:"))
-        return 2;
+        return Severity::Error;
     if (msg.starts_with("Warning:"))
-        return 1;
-    return 0;
+        return Severity::Warning;
+    return Severity::Note;
 }
 
-Simulation::RunResult Simulation::run(uint64_t ticks) {
-    RunResult r = start(ticks);
-    while (r.status == RunStatus::Yielded)
-        r = resume();
-    return r;
+std::string Simulation::report_text(const std::string& msg) {
+    size_t colon = msg.find(':');
+    std::string text = colon == std::string::npos ? msg : msg.substr(colon + 1);
+    size_t start = text.find_first_not_of(' ');
+    return start == std::string::npos ? "" : text.substr(start);
 }
 
 // The hook on the kernel's signal-update phase: do the updates, then, in a
@@ -343,42 +330,4 @@ Simulation::RunResult Simulation::after_run() {
     return {RunStatus::Completed, ""};
 }
 
-std::string vlog_to_logic(const uint8_t* raw, unsigned nbits) {
-    std::string out(nbits, 'X');
-    for (unsigned i = 0; i < nbits; i++) {
-        VlogLogicVal w;
-        std::memcpy(&w, raw + (i / 32) * sizeof(VlogLogicVal), sizeof w);
-        bool a = (w.aVal >> (i % 32)) & 1, b = (w.bVal >> (i % 32)) & 1;
-        out[nbits - 1 - i] = b ? (a ? 'X' : 'Z') : (a ? '1' : '0');
-    }
-    return out;
-}
-
-void logic_to_vlog(const std::string& s, uint8_t* raw, unsigned nbits) {
-    const size_t words = (nbits + 31) / 32;
-    std::vector<VlogLogicVal> w(words, VlogLogicVal{0, 0});
-    for (unsigned i = 0; i < nbits && i < s.size(); i++) {
-        char c = toupper((unsigned char)s[s.size() - 1 - i]);
-        bool a, b;
-        if (c == '0' || c == 'L') {
-            a = 0;
-            b = 0;
-        } else if (c == '1' || c == 'H') {
-            a = 1;
-            b = 0;
-        } else if (c == 'Z') {
-            a = 0;
-            b = 1;
-        } else {
-            a = 1;
-            b = 1;
-        }
-        if (a)
-            w[i / 32].aVal |= 1u << (i % 32);
-        if (b)
-            w[i / 32].bVal |= 1u << (i % 32);
-    }
-    std::memcpy(raw, w.data(), words * sizeof(VlogLogicVal));
-}
-
-} // namespace nvcx
+} // namespace nvcx::xsim

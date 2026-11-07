@@ -1,14 +1,13 @@
-// nvcx: a VHPI plugin for NVC that simulates xsim snapshots behind plain VHDL
-// shell entities. A shell is an entity with the core's ports whose
-// architecture holds an instance of nvcx.bridge, implementing the foreign
-// procedure:
+// nvcx: a VHPI plugin for NVC that simulates cores on other simulators (xsim)
+// behind plain VHDL shell entities. A shell is an entity with the core's ports
+// whose architecture holds an instance of nvcx.bridge, implementing the
+// foreign procedure:
 //
 //   procedure nvcx_open(snapshot, name, generics : string);
 //
-// ...which opens the snapshot on Vivado's xsim kernel and finds the shell's
-// ports by name through VHPI. Every instance shares the one kernel, which
-// keeps its state in process-wide globals: the core switches them from one
-// design to the next (Simulation::make_current).
+// ...which opens the snapshot on the backend that built it (open_core) and
+// finds the shell's ports by name through VHPI. The bridge sees a core only
+// through nvcx::Core.
 //
 // Timing: the two simulators advance in lockstep, one delta cycle each. At the
 // end of every NVC delta's process phase the plugin writes the inputs that
@@ -38,8 +37,7 @@
 #include <string>
 #include <vector>
 #include <vhpi_user.h>
-#include "nvcx/simulation.hpp"
-#include "nvcx/vivado.hpp"
+#include "nvcx/core.hpp"
 
 namespace fs = std::filesystem;
 using namespace nvcx;
@@ -49,7 +47,7 @@ namespace {
 struct Instance;
 
 struct Port {
-    const Simulation::Port* xp; // the core's port, in XSI terms
+    const Core::Port* xp; // the core's port
     enum Kind {
         Logic,    // a lone std_ulogic / bit: vhpiLogicVal
         LogicVec, // an array of them: vhpiLogicVecVal
@@ -73,7 +71,7 @@ struct Port {
 
 struct Instance {
     std::string name;
-    std::unique_ptr<Simulation> sim;
+    std::unique_ptr<Core> sim;
     std::vector<Port> ins, outs;
     uint64_t fs_per_tick = 1;
     bool finished_reported = false;
@@ -89,7 +87,7 @@ struct Instance {
     // left for the NVC side (see stage_run)
     bool stepping = false;
     bool arriving = false; // ...only to arrive at this time (see Pass)
-    Simulation::RunResult result{Simulation::RunStatus::Completed, ""};
+    Core::RunResult result{Core::RunStatus::Completed, ""};
     std::vector<Port*> outs_changed;
     bool next_pending = false; // the kernel has a next event, at next_at (fs)
     uint64_t next_at = 0;
@@ -135,8 +133,8 @@ std::string get_string(vhpiHandleT param) {
     return buf;
 }
 
-// The snapshot is the directory xelab wrote, xsim.dir/<name>, resolved by
-// tcl/nvcx.tcl when it wrote the shell.
+// The snapshot is the directory the backend's build wrote (for xsim,
+// xsim.dir/<name>), resolved by tcl/nvcx.tcl when it wrote the shell.
 fs::path resolve_snapshot(const std::string& name,
                           const std::string& snapshot,
                           const std::string& generics) {
@@ -160,13 +158,7 @@ fs::path resolve_snapshot(const std::string& name,
         vhpi_assert(vhpiWarning, fmt, msg.c_str());
         return {};
     }
-    // the kernel needs xsimk.so with the metadata beside it, in an xsim.dir
-    if (!fs::is_regular_file(fs::path(snapshot) / "xsimk.so")) {
-        fail(std::format("snapshot directory {} has no xsimk.so (elaborate "
-                         "with xelab -dll)",
-                         snapshot));
-    }
-    return fs::path(snapshot) / "xsimk.so";
+    return fs::path(snapshot);
 }
 
 std::string lower(std::string s) {
@@ -176,7 +168,7 @@ std::string lower(std::string s) {
     return s;
 }
 
-// std_logic ordinals (LOGIC_CHARS: U X 0 1 Z W L H -) to XSI's Verilog
+// std_logic ordinals (LOGIC_CHARS: U X 0 1 Z W L H -) to Verilog VlogLogicVal
 // words, element 0 being the most significant bit: 'L' is 0, 'H' is 1, 'Z' is
 // Z, and anything else X, as logic_to_vlog.
 void enums_to_vlog(const vhpiEnumT* e, size_t nbits, uint8_t* raw) {
@@ -215,9 +207,9 @@ void vlog_to_enums(const uint8_t* raw, size_t nbits, vhpiEnumT* e) {
 }
 
 // The shell port's natural VHPI value format decides how values are read and
-// deposited; XSI's size for the core's port must match it.
+// deposited; the core's size for its port must match it.
 Port classify(const std::string& instance,
-              const Simulation::Port& xp,
+              const Core::Port& xp,
               vhpiHandleT handle) {
     Port p{.xp = &xp, .kind = Port::Logic, .bits = 1, .handle = handle};
     vhpiValueT v{};
@@ -251,7 +243,7 @@ Port classify(const std::string& instance,
                          xp.name,
                          static_cast<int>(v.format)));
     }
-    // the core's side: XSI reports bytes for VHDL, bits for Verilog
+    // the core's side: bytes for VHDL, bits for Verilog (Core::Port)
     size_t core = xp.vhdl ? (p.kind == Port::Integer ? 4
                              : p.kind == Port::Real  ? 8
                                                      : p.bits)
@@ -552,10 +544,10 @@ void stage_run(Instance& in, uint64_t now_fs) {
     if (!in.stepping) {
         return;
     }
-    Simulation& d = *in.sim;
+    Core& d = *in.sim;
     const uint64_t target = now_fs / in.fs_per_tick;
-    using Status = Simulation::RunStatus;
-    Simulation::RunResult r{Status::Completed, ""};
+    using Status = Core::RunStatus;
+    Core::RunResult r{Status::Completed, ""};
     // Bring the kernel to this time, paused after the signal updates of its
     // first delta here (its own events) and before their processes. A pause
     // at an earlier time has nothing for NVC: nothing was scheduled there.
@@ -612,7 +604,7 @@ bool stage_deposit(Instance& in, uint64_t now_fs) {
     }
     in.stepping = false;
     in.arriving = false;
-    using Status = Simulation::RunStatus;
+    using Status = Core::RunStatus;
     if (in.result.status == Status::Finished && !in.finished_reported) {
         in.finished_reported = true;
         vhpi_printf("nvcx: %s: the core finished its simulation; its outputs "
@@ -662,33 +654,27 @@ void exec_open(const vhpiCbDataT* cb) {
         vhpi_release_handle(p);
     }
     const std::string &snapshot = args[0], &name = args[1], &generics = args[2];
-    fs::path design_so = resolve_snapshot(name, snapshot, generics);
-    if (design_so.empty()) {
+    fs::path dir = resolve_snapshot(name, snapshot, generics);
+    if (dir.empty()) {
         return; // a black box
     }
     auto inst = std::make_unique<Instance>();
     inst->name = name;
     try {
-        // loads Vivado's kernel and its closure on the first instance
-        inst->sim = std::make_unique<Simulation>(design_so.string());
+        // (xsim: loads Vivado's kernel and its closure on the first instance)
+        inst->sim = open_core(dir);
     } catch (const std::exception& e) {
         fail(name + ": " + e.what());
     }
-    Simulation& d = *inst->sim;
+    Core& d = *inst->sim;
     // The core's reports and assertions become NVC's, at their severity, so
     // NVC's --exit-severity governs them like any other assertion.
-    d.set_report_sink([name](const std::string& msg) {
+    d.set_report_sink([name](Core::Severity s, const std::string& text) {
         static char fmt[] = "%s";
         static const vhpiSeverityT sev[] = {
             vhpiNote, vhpiWarning, vhpiError, vhpiFailure};
-        int s = Simulation::report_severity(msg);
-        size_t colon = msg.find(':');
-        std::string text =
-            colon == std::string::npos ? msg : msg.substr(colon + 1);
-        while (!text.empty() && text.front() == ' ') {
-            text.erase(0, 1);
-        }
-        vhpi_assert(sev[s], fmt, (name + ": " + text).c_str());
+        vhpi_assert(
+            sev[static_cast<int>(s)], fmt, (name + ": " + text).c_str());
     });
 
     // The shell is the parent of this bridge instance: ":tb:dut:core:" ->
@@ -698,7 +684,7 @@ void exec_open(const vhpiCbDataT* cb) {
         shell.pop_back();
     }
     shell = shell.substr(0, shell.rfind(':') + 1);
-    for (const Simulation::Port& xp : d.ports()) {
+    for (const Core::Port& xp : d.ports()) {
         if (xp.dir != Direction::In && xp.dir != Direction::Out) {
             fail(std::format(
                 "{}: port {}: inout ports are not supported", name, xp.name));

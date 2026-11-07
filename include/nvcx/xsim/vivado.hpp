@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace nvcx {
+namespace nvcx::xsim {
 
 struct Closure {
     std::filesystem::path kernel; // Vivado's simulator kernel (not loaded here)
@@ -17,4 +17,4 @@ struct Closure {
 // see src/kernelstub.cpp.)
 const Closure& load_closure();
 
-} // namespace nvcx
+} // namespace nvcx::xsim

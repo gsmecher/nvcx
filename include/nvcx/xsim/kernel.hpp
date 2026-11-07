@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-namespace nvcx {
+namespace nvcx::xsim {
 
 struct XsiSetupInfo {
     char* logFileName;
@@ -13,10 +13,6 @@ struct XsiSetupInfo {
 };
 
 using XsiHandle = void*;
-
-struct VlogLogicVal {
-    uint32_t aVal, bVal;
-};
 
 enum : int {
     xsiNumTopPorts = 1,
@@ -109,11 +105,11 @@ class Kernel {
     void* handle_ = nullptr;
 };
 
-} // namespace nvcx
+} // namespace nvcx::xsim
 
 // Numeric constants of the kernel's interface, found empirically. Keep
 // them here so that a Vivado release that changes one is a one-file fix.
-namespace nvcx::abi {
+namespace nvcx::xsim::abi {
 
 // kernel globals: GlobalDesignProperties' status kind, the values that end a
 // simulation (2 is "stopped", which discover_offsets looks for)
@@ -128,4 +124,4 @@ constexpr size_t LISTQ_HEAD = 0xb0;
 constexpr size_t TIMESLOT_TIME = 0x0;
 constexpr size_t TIMESLOT_NEXT = 0x10;
 
-} // namespace nvcx::abi
+} // namespace nvcx::xsim::abi
