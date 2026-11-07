@@ -703,9 +703,17 @@ void exec_open(const vhpiCbDataT* cb) {
             fail(std::format(
                 "{}: port {}: inout ports are not supported", name, xp.name));
         }
+        // A basic identifier (any case), or else an extended one: a Verilog
+        // name that is a VHDL reserved word, or not a basic identifier, can
+        // only be declared as \next\, verbatim
         std::string port_name = shell + lower(xp.name);
         vhpiHandleT h =
             vhpi_handle_by_name(const_cast<char*>(port_name.c_str()), nullptr);
+        if (!h) {
+            port_name = shell + "\\" + xp.name + "\\";
+            h = vhpi_handle_by_name(const_cast<char*>(port_name.c_str()),
+                                    nullptr);
+        }
         if (!h) {
             fail(std::format("{}: the shell has no port named {} (looked "
                              "for {})",

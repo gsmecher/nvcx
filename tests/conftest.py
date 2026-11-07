@@ -38,6 +38,7 @@ DESIGNS = {
     # regressions (tests/test_regress.py)
     "strgen": ("vhdl", "strgen.vhd", "strgen"),
     "strgen_v": ("sv", "strgen.v", "strgen"),
+    "kwports_v": ("sv", "kwports.v", "kwports"),
 }
 
 

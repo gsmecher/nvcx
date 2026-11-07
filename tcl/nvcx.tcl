@@ -143,6 +143,14 @@ namespace eval nvcx {
         }
     }
 
+    # A port's name as the shell declares it: a basic identifier in lower
+    # case, an extended one (\next\, for a Verilog port named after a VHDL
+    # reserved word) verbatim, since its case is part of it
+    proc port_name {name} {
+        if {[string index $name 0] eq "\\"} { return $name }
+        return [string tolower $name]
+    }
+
     # Every component instance under *h*, bound or not: component name ->
     # list of {generics ports fullname}, one per instance, where generics is
     # a list of {name type value} and ports a list of {name mode type}.
@@ -177,7 +185,7 @@ namespace eval nvcx {
                 if {[catch {port_type [vhpi::get_str Name [vhpi::handle BaseType $p]]} type]} {
                     set type [list unsupported $type]
                 }
-                lappend ports [list [string tolower [vhpi::get_str Name $p]] $mode $type]
+                lappend ports [list [port_name [vhpi::get_str Name $p]] $mode $type]
             }
             dict lappend found $comp [list $generics $ports [vhpi::get_str FullName $h]]
         }

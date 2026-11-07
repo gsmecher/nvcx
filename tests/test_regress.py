@@ -23,6 +23,17 @@ REGRESSIONS = {
         "10ns",
         sources=["strgen_comp.vhd"],
     ),
+    # A Verilog port whose name is a VHDL reserved word (the SGen FFT cores' "next") or otherwise not
+    # a basic identifier is an extended identifier in the component, \next\. The bridge looked the
+    # shell's port up by the bare Verilog name and found nothing, and nvcx.tcl lower-cased extended
+    # identifiers too, making \In\ a different port, \in\.
+    "extended_identifier_ports": Case(
+        [Core("kwports", "kwports_v", library="work")],
+        "tb_kwports.vhd",
+        "tb_kwports",
+        "10ns",
+        sources=["kwports_comp.vhd"],
+    ),
 }
 
 
