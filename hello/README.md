@@ -12,6 +12,15 @@ interface and embed a xsim kernel using its XSI API.
 For portability's sake, this example uses Docker to insulate the runtime from
 the host OS. `tb.fst` holds NVC's waveform, including the shell's ports.
 
+To run it on the host instead, with the NVC that nvcx needs (see the top-level
+README), CMake, Boost.Context and tcllib installed:
+
+    $ make DOCKER=0
+
+Either way, the Makefile builds nvcx from this tree, installs it into
+`prefix/` here, and finds its pieces there through pkg-config, as your own
+build would with an installed nvcx.
+
 # Why?
 
 * NVC can now simulate encrypted IP - this has been a longstanding and

@@ -4,36 +4,61 @@
 #   $ source /opt/xilinx/2026.1/Vivado/settings64.sh  # or whatever
 #   $ make
 #
-# Uses Docker (with Vivado bind-mounted) to avoid too much dependence on the
-# host OS/runtime.
+# By default this runs in the project's Docker image (with Vivado bind-mounted),
+# to avoid too much dependence on the host OS/runtime. To run it on the host
+# instead, which then needs NVC (with the patches in ../contrib), CMake,
+# Boost.Context and tcllib:
+#
+#   $ make DOCKER=0
 
 ifeq ($(XILINX_VIVADO),)
   $(error XILINX_VIVADO is not set)
 endif
 
-ifeq ($(wildcard /.dockerenv),)
+# The nvcx source tree. (The test suite runs a copy of this directory from
+# elsewhere, against the tree itself: nothing here depends on what a copy of
+# the tree would have to include.)
+NVCX_ROOT ?= ..
+
+# Inside the container, do the thing; outside, only if asked to
+ifneq ($(wildcard /.dockerenv),)
+  override DOCKER := 0
+endif
+DOCKER ?= 1
+
+ifeq ($(DOCKER),1)
 #
-# Outside Docker: build the image and re-run this Makefile inside it
+# Build the image and re-run this Makefile inside it
 #
 
 DOCKER_TARGETS := all clean sim snapshot bridge
-include ../docker.mk
+include $(NVCX_ROOT)/docker.mk
 
 else
 #
-# Inside Docker: do the thing
+# Do the thing
 #
 
-.PHONY: all bridge snapshot sim clean
+.PHONY: all tools bridge snapshot sim clean
 all: sim
+
+# Vivado's tools come from XILINX_VIVADO, whatever PATH holds
+export PATH := $(XILINX_VIVADO)/bin:$(PATH)
+
+# 0. What the steps below run: say so now, not half-way through
+tools:
+	@for t in cmake pkg-config nvc vivado xelab; do \
+		command -v $$t >/dev/null || { echo "hello: $$t not found on PATH" >&2; exit 1; }; \
+	done
 
 # 1. Build and install nvcx into a local prefix. To use an nvcx that's already
 #    installed, drop `bridge` from sim's prerequisites below: pkg-config falls
 #    back to its default search path.
 PREFIX := $(CURDIR)/prefix
 PKG_CONFIG := PKG_CONFIG_PATH=$(PREFIX)/lib/pkgconfig pkg-config
-bridge:
-	cmake -S .. -B build -DCMAKE_INSTALL_PREFIX=$(PREFIX)
+# (CMAKE_INSTALL_LIBDIR: lib64 on some hosts, by default)
+bridge: tools
+	cmake -S $(NVCX_ROOT) -B build -DCMAKE_INSTALL_PREFIX=$(PREFIX) -DCMAKE_INSTALL_LIBDIR=lib
 	cmake --build build -j
 	cmake --install build
 
@@ -46,7 +71,7 @@ NVCX_TCLDIR = $(shell $(PKG_CONFIG) --variable=tcldir nvcx)
 EXPORT   := export_sim/hello_dds/xsim
 SNAPSHOT := $(EXPORT)/xsim.dir/hello_dds/xsimk.so
 snapshot: $(SNAPSHOT)
-$(SNAPSHOT): generate_ip.tcl
+$(SNAPSHOT): generate_ip.tcl | tools
 	./generate_ip.tcl
 	sed -i '/^  xelab -dll /! s/^  xelab /  xelab -dll /' $(EXPORT)/hello_dds.sh
 	cd $(EXPORT) && ./hello_dds.sh -step compile
@@ -57,6 +82,7 @@ XPM := $(XILINX_VIVADO)/data/ip/xpm/xpm_VCOMP.vhd
 NVC := nvc --std=2008 --map=nvcx:nvcx --map=xpm:xpm
 sim: bridge $(SNAPSHOT)
 	# Teach your preferred build tool how to do it better
+	@test -n "$(NVCX_PLUGIN)" || { echo "hello: pkg-config cannot find nvcx (looked in $(PREFIX)/lib/pkgconfig first)" >&2; exit 1; }
 	rm -rf work
 	$(NVC) --work=nvcx:nvcx -a $(NVCX_VHDL)
 	$(NVC) --work=xpm:xpm -a $(XPM)

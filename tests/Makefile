@@ -1,7 +1,7 @@
 # Use `make test` at the top level
 
 # The container builds into build-docker/ on the host, mounted over build/, so its binaries never
-# mix with a native build (the hello test builds its own, into hello/build).
+# mix with a native build (the hello test builds its own, in a copy of hello/ under pytest's tmp).
 DOCKER_WORKDIR := /work
 include ../docker.mk
 DOCKER_ARGS = -v $(NVCX_ROOT)/build-docker:/work/build
