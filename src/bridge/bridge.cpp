@@ -56,6 +56,7 @@ struct Port {
         Enum,     // any other scalar enumeration (boolean): vhpiEnumVal
     } kind;
     size_t bits;               // scalars on the VHPI side (1 unless LogicVec)
+    bool bit = false;          // Logic(Vec) of bit, not std_ulogic (see is_bit)
     vhpiHandleT handle;        // the shell's port of the same name
     std::vector<uint8_t> last; // last value crossed, to skip redundant deposits
     // Per-step scratch, sized once so that a step does not allocate: the
@@ -168,6 +169,28 @@ std::string lower(std::string s) {
     return s;
 }
 
+// Whether a Logic or LogicVec port's scalars are bit rather than std_ulogic.
+// NVC gives both the vhpiLogicVal formats, but the values are the type's
+// enumeration positions: '0' is 0 for bit and 2 (vhpi0) for std_ulogic. A
+// VHDL core takes positions as they are; a Verilog one needs to know.
+bool is_bit(vhpiHandleT port, bool array) {
+    vhpiHandleT type = vhpi_handle(vhpiBaseType, port);
+    if (type && array) {
+        vhpiHandleT elem = vhpi_handle(vhpiElemType, type);
+        vhpi_release_handle(type);
+        type = elem ? vhpi_handle(vhpiBaseType, elem) : nullptr;
+        if (elem) {
+            vhpi_release_handle(elem);
+        }
+    }
+    if (!type) {
+        return false;
+    }
+    const bool two = vhpi_get(vhpiNumLiteralsP, type) == 2;
+    vhpi_release_handle(type);
+    return two;
+}
+
 // std_logic ordinals (LOGIC_CHARS: U X 0 1 Z W L H -) to Verilog VlogLogicVal
 // words, element 0 being the most significant bit: 'L' is 0, 'H' is 1, 'Z' is
 // Z, and anything else X, as logic_to_vlog.
@@ -203,6 +226,24 @@ void vlog_to_enums(const uint8_t* raw, size_t nbits, vhpiEnumT* e) {
         bool a = (w[i / 32].aVal >> (i % 32)) & 1;
         bool b = (w[i / 32].bVal >> (i % 32)) & 1;
         e[nbits - 1 - i] = b ? (a ? vhpiX : vhpiZ) : (a ? vhpi1 : vhpi0);
+    }
+}
+
+// A bit port's scalars, in p.enums, between bit's positions and std_ulogic's
+// for a Verilog core: bit has no X or Z, which a core's output reads as '0'.
+void bits_to_logic(Port& p) {
+    if (p.bit) {
+        for (vhpiEnumT& e : p.enums) {
+            e = e ? vhpi1 : vhpi0;
+        }
+    }
+}
+
+void logic_to_bits(Port& p) {
+    if (p.bit) {
+        for (vhpiEnumT& e : p.enums) {
+            e = e == vhpi1;
+        }
     }
 }
 
@@ -267,6 +308,7 @@ Port classify(const std::string& instance,
     p.raw.resize(xp.raw_size());
     if (p.kind == Port::LogicVec || p.kind == Port::Logic) {
         p.enums.resize(p.bits);
+        p.bit = is_bit(handle, p.kind == Port::LogicVec);
     }
     return p;
 }
@@ -298,6 +340,7 @@ void read_port(const Instance& in, Port& p) {
             raw[0] = (uint8_t)v.value.enumv;
         } else {
             p.enums[0] = v.value.enumv;
+            bits_to_logic(p);
             enums_to_vlog(p.enums.data(), 1, raw);
         }
     } else {
@@ -316,6 +359,7 @@ void read_port(const Instance& in, Port& p) {
                 raw[i] = (uint8_t)p.enums[i];
             }
         } else {
+            bits_to_logic(p);
             enums_to_vlog(p.enums.data(), p.bits, raw);
         }
     }
@@ -346,6 +390,7 @@ void write_port(const Instance& in, Port& p) {
             }
         } else {
             vlog_to_enums(raw, p.bits, p.enums.data());
+            logic_to_bits(p);
         }
         if (p.kind == Port::Logic) {
             v.format = vhpiLogicVal;
