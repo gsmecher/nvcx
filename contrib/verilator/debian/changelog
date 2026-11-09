@@ -1,0 +1,947 @@
+verilator (5.054+git202611072109.74cf7aa-1+nvcx2) UNRELEASED; urgency=medium
+
+  * d/patches: only the force/release fix nvcx's XPMs need (Vivado's
+    xpm_cdc with INIT_SYNC_FF=1 forces and releases whole unpacked arrays):
+    force-whole-unpacked-arrays.patch now has V3Slice split every force,
+    release, assign and deassign of an unpacked array into elements, as
+    forwarded upstream (verilator/verilator#9091, issue #9090); a force or
+    assign of a whole array from a queue or a streaming expression is
+    "Unsupported:" rather than an internal error. Dropped
+    force-range-bitsel-reads.patch, force-struct-array-ranges-unsupported.patch,
+    forceable-procedural-assign.patch and
+    force-arrays-in-structs-unsupported.patch.
+
+ -- Graeme Smecher <gsmecher@t0.technology>  Sun, 08 Nov 2026 12:00:00 -0700
+
+verilator (5.054+git202611072109.74cf7aa-1+nvcx1) UNRELEASED; urgency=medium
+
+  * Upstream snapshot 74cf7aada (master, 2026-11-07), which has nvcx's fix
+    for wide unpacked array copies between opposite directions (#9075).
+  * d/patches: the force/release series refreshed against it, in the order
+    of its pull requests: force-whole-unpacked-arrays.patch,
+    force-range-bitsel-reads.patch, force-struct-array-ranges-unsupported.patch,
+    forceable-procedural-assign.patch (new: a procedural assign of a
+    /*verilator forceable*/ signal), force-arrays-in-structs-unsupported.patch.
+  * d/patches/sched-sense-net-init.patch: fire change sensitivities on
+    continuously assigned nets at time 0, as xsim does (Xilinx XPM
+    xpm_fifo_axis depends on it). Not forwarded: upstream chose otherwise in
+    #8911; nvcx runs Verilator cores alongside xsim.
+  * d/patches/tristate-z-tested-input.patch: refreshed.
+  * d/rules: NVCX_TESTS runs those patches' tests.
+  * The upstream version of a snapshot names its commit's UTC date and time,
+    so that two snapshots of one day sort in order.
+
+ -- Graeme Smecher <gsmecher@t0.technology>  Sat, 07 Nov 2026 16:00:00 -0700
+
+verilator (5.054+git20261107.acdc8dc-1+nvcx1) UNRELEASED; urgency=medium
+
+  * Upstream snapshot acdc8dc72 (master, 2026-11-07), which nvcx carries
+    with its own fixes until they are released. The upstream source is now
+    the tag or commit in upstream.ref (build-deb.sh).
+  * Drop d/patches/const-net-change-sensitivity.patch: fixed upstream in
+    61ff77472 (#8911), whose t_sched_sense_const covers what our tests did.
+  * d/patches/force-whole-unpacked-arrays.patch: force/release of a whole
+    unpacked array or a slice (Xilinx XPM CDC models' GSR emulation) no
+    longer fails with an internal error in V3Force.
+  * d/patches/force-struct-array-ranges-unsupported.patch,
+    force-arrays-in-structs-unsupported.patch: report as unsupported the
+    forces whose element numbering is ambiguous, instead of simulating them
+    wrongly or not at all.
+  * d/patches/force-range-bitsel-reads.patch: element reads within a forced
+    range after a bit select force on one of its elements.
+  * d/rules: NVCX_TESTS runs those patches' tests and t_sched_sense_const.
+
+ -- Graeme Smecher <gsmecher@t0.technology>  Sat, 07 Nov 2026 08:40:00 -0700
+
+verilator (5.054-1+nvcx1) UNRELEASED; urgency=medium
+
+  * New upstream release 5.054, packaged for nvcx (contrib/verilator) from
+    Debian's 5.048-1 packaging.
+  * d/rules: name the build through VERILATOR_SRC_VERSION (src/config_rev
+    no longer carries UNKNOWN_REV); honour nodoc; drop the config_rev save;
+    run the regression tests our patches add (NVCX_TESTS).
+  * d/control: the documentation's build dependencies under <!nodoc>;
+    depend on make, which --build and --binary run.
+  * d/patches/tristate-z-tested-input.patch: accept an input-only submodule
+    port that is only tested for Z (UNISIM DSP48E2, RAMB18E2), rather than
+    refusing it as "tristate in top-level IO". A prototype, not forwarded.
+  * d/patches/const-net-change-sensitivity.patch: with --timing, fire a
+    change sensitivity on a constant-assigned net once at time 0, as without
+    --timing (a regression from upstream 5a410e95a, #8911; UNISIM RAMB18E2
+    read back wrong data). Not yet forwarded.
+
+ -- Graeme Smecher <gsmecher@t0.technology>  Fri, 06 Nov 2026 18:00:00 -0700
+
+verilator (5.048-1) unstable; urgency=medium
+
+  * [e5e4b4d] New upstream version 5.048
+  * [6891a8e] d/control: bump standards version to 4.7.4
+  * [9192a1e] d/verilator.lintian-overrides: remove unused overrides
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 29 Apr 2026 19:40:17 +0200
+
+verilator (5.046-1) unstable; urgency=medium
+
+  * [2cd089b] New upstream version 5.046
+  * [8c5693a] d/gbp.conf: Lax requirement to use branch name 'debian/sid'
+    So that git-buildpackage will always build using the currently checked
+    out branch as the Debian branch.
+    This makes it easier for contributors to work with feature and bugfix
+    branches.
+  * [b06b497] Update copyright info
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Tue, 03 Mar 2026 00:06:05 +0100
+
+verilator (5.044-1) unstable; urgency=medium
+
+  * [f583940] New upstream version 5.044
+  * [ea40216] d/control: bump standards version to 4.7.3
+  * [12a35b8] Update copyright years
+  * [3e31295] d/control: drop redundant Priority: optional field
+  * [aa73ef3] d/control: remove kfreebsd-any arch spec
+    it has been recently removed from dpkg
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 28 Jan 2026 20:38:17 +0100
+
+verilator (5.042-1) unstable; urgency=medium
+
+  * [329aeda] New upstream version 5.042
+  * [b0d6477] Drop redundant Rules-Requires-Root field
+  * [9da26a5] Drop fix-blhc.patch, applied upstream
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 05 Nov 2025 13:11:52 +0100
+
+verilator (5.040-2) unstable; urgency=medium
+
+  * [00b03ff] d/README.source: add note about build for 64-bit archs only
+  * [a8886d1] Add fix-blhc.patch to add LDFLAGS in a generated makefile to fix
+    blhc failure
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Fri, 12 Sep 2025 07:10:07 +0200
+
+verilator (5.040-1) unstable; urgency=medium
+
+  * [3f6cbbb] New upstream version 5.040
+  * [ff7531f] d/verilator.lintian-overrides: remove obsolete false positive
+  * [8704041] d/control: add architecture-is-64-bit to build deps to build for
+    64-bit archs only
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 10 Sep 2025 16:06:41 +0200
+
+verilator (5.038-1) unstable; urgency=medium
+
+  * [76e7289] New upstream version 5.038
+  * [0eabe25] d/control: bump standards version to 4.7.2
+  * [82ba2ab] Update copyright years
+  * [e8759e0] d/copyright: add copyright info for ci/*.bash
+  * [4830663] Dropped fix-man-whatis.patch, applied upstream
+  * [876f0e2] d/control: add python3-distro to build-deps
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Fri, 15 Aug 2025 06:05:12 +0200
+
+verilator (5.032-1) unstable; urgency=medium
+
+  * [d2147ea] New upstream version 5.032
+  * [e588f4f] d/changelog: remove trailing whitespace
+  * [478093e] Add fix-man-whatis.patch to create manpages with useful whatis
+    entry
+  * [a2cfaf5] Re-add lintian overrides for spelling mistakes false positives.
+    It seems they were removed by mistake
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 04 Jan 2025 14:43:08 +0100
+
+verilator (5.030-4) unstable; urgency=medium
+
+  * [125f871] d/t/control: fix Architecture specification
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 30 Dec 2024 13:49:38 +0100
+
+verilator (5.030-3) unstable; urgency=medium
+
+  * [47e42d0] Fix last changelog entry
+  * [da80588] d/tests/control: exclude armel architecture.
+    See: https://github.com/verilator/verilator/issues/5706
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 29 Dec 2024 13:22:39 +0100
+
+verilator (5.030-2) unstable; urgency=medium
+
+  * [f0f19fb] Add make-hello-c test
+  * [1c1671f] d/control: add g++ dependency
+  * [d46d849] d/control: add ccache to deps
+  * [d72c87e] d/rules: Remove override_dh_install target
+    upstream no longer installs arch specific binaries in data_dir/bin, but it
+    installs some required scripts there (Closes: #1090785, #10714250)
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Thu, 19 Dec 2024 16:24:40 +0100
+
+verilator (5.030-1) unstable; urgency=medium
+
+  * [b3eba13] New upstream version 5.030 (Closes: #1071425)
+  * [77e508e] Update copyright years
+  * [2f79e2d] d/changelog: remove trailing whitespace
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 09 Dec 2024 18:16:56 +0100
+
+verilator (5.024-1) unstable; urgency=medium
+
+  * Team upload.
+  * [6494ad2] New upstream version 5.024
+  * [cd7e535] d/rules: Add target override_dh_install
+  * [46fe05b] d/control: Use the Recommends only on some architectures
+  * [b2657af] d/verilator.lintian-overrides: Update the overrides
+  * [beddf5b] d/control: Bump Standards-Version to 4.7.0
+    No further modifications needed.
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Fri, 10 May 2024 18:56:00 +0200
+
+verilator (5.020-1) unstable; urgency=medium
+
+  * Team upload
+
+  [ Adrian Bunk ]
+  * [ab21150] Use -g1 to work around mipsel address space limitation
+
+  [ Carsten Schoenert ]
+  * [3f5e8c3] New upstream version 5.020
+    (Closes: #1053383)
+  * [e2c5fd7] Rebuild patch queue from patch-queue branch
+    Removed patches (included upstream):
+    fix-typos.patch
+    remove-gtag.js.patch
+  * [b782632] d/copyright: Update year data
+  * [ed077bf] d/verilator.lintian-overrides: Adjust override to 'wTH'
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Sat, 13 Jan 2024 09:54:40 +0100
+
+verilator (5.012-1) unstable; urgency=medium
+
+  * [bbe4c20] New upstream version 5.012
+  * [988bc5e] Add fix-typos.patch to fix a typo
+  * [ffd7dca] Add remove-gtag.js.patch to avoid inclusion of gtag.js in
+    generated HTML docs
+  * Upload to unstable
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 02 Jul 2023 22:36:32 +0200
+
+verilator (5.010-1) experimental; urgency=medium
+
+  * Team upload
+  * [01cc06b] New upstream version 5.010
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Sun, 14 May 2023 09:57:17 +0200
+
+verilator (5.008-1) experimental; urgency=medium
+
+  * Team upload
+  [ Dmitry Shachnev ]
+  * [38e486b] Move ${sphinxdoc:Built-Using} to the correct field.
+    (Closes: #1033667)
+
+  [ Carsten Schoenert ]
+  * [0a50071] New upstream version 5.008
+    (Closes: #1030913)
+  * [bb4558b] Rebuild patch queue from patch-queue branch
+    Removed patches (included upstream):
+    Add-SOURCE_DATE_EPOCH-for-docs-guide-conf.py-3918.patch
+    (Closes: #1031711)
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Thu, 30 Mar 2023 19:48:21 +0200
+
+verilator (5.006-2) unstable; urgency=medium
+
+  * Team upload
+  * Rebuild patch queue from patch-queue branch
+    Added patch:
+    Add-SOURCE_DATE_EPOCH-for-docs-guide-conf.py-3918.patch
+    Make the package build reproducible again by using this upstream
+    modification.
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Tue, 07 Feb 2023 17:17:27 +0100
+
+verilator (5.006-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream version 5.006
+  * Rebuild patch queue from patch-queue branch
+    Removed patches (included upstream):
+    Add-manpages-for-missing-user-commands-using-help2man.patch
+    Fix-VL_CPU_RELAX-on-MIPS-Armel-s390-sparc-3891.patch
+    Fix-to-use-same-std-flag-in-Verilator-and-Verilated-desig.patch
+  * d/u/metadata: Adjust repository URL data
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Wed, 25 Jan 2023 17:52:48 +0100
+
+verilator (5.004-2) unstable; urgency=medium
+
+  * Team upload
+  * Rebuild patch queue from patch-queue branch
+    Added patch:
+    Fix-VL_CPU_RELAX-on-MIPS-Armel-s390-sparc-3891.patch
+  * d/rules: Re-add override_dh_auto_test
+    dh_auto_test is failing on some architectures, for now ignore these
+    architectures.
+  * d/rules: Hack around keep original version config_rev
+    The file src/config_rev is used to create the file src/config_rev.h.
+    We modify the source file in d/rules which let dpkg-source detect unwanted
+    modifications in case we try to build the twice. This adds a hack to work
+    around this.
+  * d/rules: Tune modification of version string data
+    Use "(Debian $(DEB_VERSION))" instead of "none" in the version string.
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Sat, 21 Jan 2023 11:08:36 +0100
+
+verilator (5.004-1) unstable; urgency=medium
+
+  * Team upload
+
+  [ أحمد المحمودي (Ahmed El-Mahmoudy) ]
+  * New upstream version 4.038
+
+  [ Steffen Möller ]
+  * Update metadata - added refs to conda and guix
+
+  [ Carsten Schoenert ]
+  * d/gbp.conf: Adding default data for git-buildpackage
+  * New upstream version 5.004
+    This version is a new major release of verilator. It has significant
+    changes and new feature. For an overview of the changes please have
+    a look at https://github.com/verilator/verilator/blob/master/Changes
+    or into the offline documentation shipped within the package at
+    file:///usr/share/doc/verilator/html/changes.html or
+    file:///usr/share/doc/verilator/verilator.pdf.
+  * Rebuild patch queue from patch-queue branch
+    Added patches:
+    Add-manpages-for-missing-user-commands-using-help2man.patch
+    Fix-to-use-same-std-flag-in-Verilator-and-Verilated-desig.patch
+    Removed patches (included upstream):
+    bison-3.7.patch
+    reproducible_build.diff
+    Removed patch (obsolete due upstream changes):
+    interpreter.patch
+  * d/*: Running wrap-and-sort -ast
+  * d/{docs, doc-base}: Renamed to verilator.{docs, doc-base}
+  * d/control: Add new build dependencies
+    Due changes by upstream some new build dependencies are now required
+    to build the documentation ans man pages.
+  * d/control: Add additional Depends for verilator
+    Some files of verilator are depending on Python 3 or Perl available
+    on the system, the sphinxdoc sequencer requires also some additional
+    installed packages for getting the HTML documentation usable.
+  * d/rules: Update/add/modify various targets
+    Tune the targets so we produce all related files and prepare the package
+    installation.
+  * d/verilator.docs: Updating due upstream changes
+    Adjustments needed to get the correct files installed.
+  * d/verilator.doc-base: Rewrite due upstream changes
+  * d/watch: Move over to version 4 and git mode on GitHub
+  * d/copyright: Update year data
+  * d/u/metadate: Adjust and add some new data
+  * d/verilator.lintian-overrides: Add stuff we can ignore
+  * d/s/lintian-overrides: Ignore too some source related stuff
+  * d/control: Bump Standards-Version to 4.6.2
+    No further modifications needed.
+  * CI: Rename to salsa-ci.yml
+  * d/rules: Drop override for dh_auto_test
+  * d/rules: s/UNKNOWN_REV/none in version string
+  * d/README.source: Add basic information about source
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Wed, 18 Jan 2023 18:39:22 +0100
+
+verilator (4.038-1) unstable; urgency=medium
+
+  * New upstream version 4.038
+    + Fix test suite failure on 32-bit archs. (Closes: #962855)
+  * Refresh patches
+  * Add bison-3.7.patch to fix build problem with bison 3.7 (Closes: #966909)
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Thu, 27 Aug 2020 07:31:46 +0200
+
+verilator (4.036-1) unstable; urgency=medium
+
+  * New upstream version 4.036
+  * Refreshed reproducible_build.diff and typos.patch.
+  * Dropped bison-3.6.1-fix.patch, applied upstream
+  * d/rules: let SYSTEMC_* be auto-detected by upstream configure script
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 13 Jun 2020 13:50:36 +0200
+
+verilator (4.034-2) unstable; urgency=medium
+
+  * Update upstream metadata: update Bug-Database, add Bug-Submit
+  * Unapply quilt patches
+  * Add bison-3.6.2-fix.patch to fix FTBFS with bison 3.6.1 (Closes: #960480)
+  * Bumped to compat level 13
+  * Added typos.patch to fix spelling mistakes
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 25 May 2020 17:02:56 +0200
+
+verilator (4.034-1) unstable; urgency=medium
+
+  * New upstream version 4.030
+  * Refresh patches
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 09 May 2020 16:41:52 +0200
+
+verilator (4.028-1) unstable; urgency=medium
+
+  * New upstream version 4.028
+  * Update standards version to 4.5.0
+  * Drop typos.diff patch, applied upstream
+  * Add interpreter.patch to set perl interpreter path
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 09 Feb 2020 17:10:40 +0100
+
+verilator (4.026-1) unstable; urgency=medium
+
+  * New upstream version 4.026
+  * Drop shebang.diff patch, no longer needed.
+  * Refresh typos.diff patch
+  * Update copyright years
+  * Forward typos.diff patch upstream
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 12 Jan 2020 03:06:03 +0100
+
+verilator (4.024-1) unstable; urgency=medium
+
+  * New upstream version 4.024
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Thu, 19 Dec 2019 11:35:04 +0100
+
+verilator (4.022-2) unstable; urgency=medium
+
+  * Add python3 to build-deps
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 01 Dec 2019 03:57:25 +0100
+
+verilator (4.022-1) unstable; urgency=medium
+
+  * New upstream version 4.022
+  * Update watch URL
+  * Updated typos.diff patch
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 30 Nov 2019 17:05:26 +0100
+
+verilator (4.020-1) unstable; urgency=medium
+
+  * Imported Upstream version 4.020
+  * Update standards version to 4.4.1
+  * Add Rules-Requires-Root: no
+  * Refresh patches.
+  * Remove fix_test.diff patch, applied upstream
+  * Forward typos.diff patch to upstream
+  * d/docs: install internals.adoc
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 19 Oct 2019 09:12:41 +0200
+
+verilator (4.018-1) unstable; urgency=medium
+
+  * Imported Upstream version 4.018
+  * Removed system-flags.diff patch, applied upstream.
+  * Refresh typos.diff patch.
+  * Add fix_test.diff patch from upstream, to fix a failure during 'make test'
+  * Update standards version to 4.4.0
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Thu, 05 Sep 2019 04:16:40 +0200
+
+verilator (4.016-3) unstable; urgency=medium
+
+  * Add system-flags.diff patch to honour system flags. (Closes: #931492)
+    Thanks to Gianfranco Costamagna <locutusofborg@debian.org>
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 07 Jul 2019 02:53:30 +0200
+
+verilator (4.016-2) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Thu, 04 Jul 2019 03:24:56 +0200
+
+verilator (4.016-1) experimental; urgency=medium
+
+  * Imported Upstream version 4.016
+  * Refresh patches
+  * d/docs: removed TODO
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 19 Jun 2019 03:32:47 +0200
+
+verilator (4.014-1) experimental; urgency=medium
+
+  * Imported Upstream version 4.014
+  * Refresh patches
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 13 May 2019 03:52:51 +0200
+
+verilator (4.012-1) experimental; urgency=medium
+
+  * New upstream release
+  * Add gbp.conf
+  * Refresh patches
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Tue, 26 Mar 2019 02:09:40 +0100
+
+verilator (4.010-1) unstable; urgency=medium
+
+  * New upstream release
+  * Update copyright years
+  * Update to standards version 4.3.0
+  * Bump to compat level 12
+  * Refresh patches
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 10 Feb 2019 04:49:41 +0100
+
+verilator (4.008-2) unstable; urgency=medium
+
+  * Promote libsystemc-dev to Recommends
+  * Added reproducible_build.diff patch for verilated_vcd_c.cpp to make it
+    reproducible.
+    Thanks to Anoop Nadig <adn322@nyu.edu>
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Fri, 21 Dec 2018 05:18:18 +0100
+
+verilator (4.008-1) unstable; urgency=medium
+
+  * New upstream release
+  * Update standards version to 4.2.1, no changes needed
+  * Add typos.diff patch to fix spelling mistakes
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 16 Dec 2018 05:59:48 +0100
+
+verilator (4.006-1) unstable; urgency=medium
+
+  * New upstream release
+  * Build with SystemC support
+  * Suggest libsystemc-dev instead of systemc
+  * Updated standards version to 4.2.0
+  * shebang.diff patch: add bin_verilator_gantt
+  * Only enable SystemC to archs. supported by the library
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 12 Nov 2018 13:38:21 +0100
+
+verilator (3.924-1) unstable; urgency=medium
+
+  [ Dima Kogan ]
+  * Moved Vcs-... tags to point to salsa
+
+  [ أحمد المحمودي (Ahmed El-Mahmoudy) ]
+  * New upstream release
+  * Refresh shebang.diff patch
+  * Update standards version
+  * Update copyright years
+  * Remove autotools-dev from build deps
+  * Bumped to compat level 11
+  * Override dh_autoreconf to fix FTBFS
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 02 Jul 2018 14:08:42 +0200
+
+verilator (3.916-1) unstable; urgency=medium
+
+  * New upstream release
+  * Dropped patches:
+    + fix_spelling.diff, applied upstream
+    + fix_smoke.diff, no longer needed
+  * Switch to a secure URL in watch file
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 26 Nov 2017 01:27:17 +0100
+
+verilator (3.914-2) unstable; urgency=medium
+
+  * fix_spelling.diff patch: remove a wrong fix
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Tue, 17 Oct 2017 05:05:20 +0200
+
+verilator (3.914-1) unstable; urgency=medium
+
+  * New upstream release
+  * Update standards version to 4.1.1
+  * Update copyright years
+  * Add fix_spelling.diff patch to fix spelling errors
+  * Add fix_smoke.diff patch to fix smoke test
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Tue, 17 Oct 2017 04:13:05 +0200
+
+verilator (3.906-1) unstable; urgency=medium
+
+  * Team upload.
+  * New upstream version 3.906
+  * Update to Standards-Version 4.0.0
+    - Use HTTPS URL for d/copyright
+
+ -- Dr. Tobias Quathamer <toddy@debian.org>  Sun, 16 Jul 2017 22:21:21 +0200
+
+verilator (3.900-1) unstable; urgency=medium
+
+  * Team upload.
+  * Imported Upstream version 3.900
+  * Refresh patch
+  * Update d/copyright
+  * Update to Standards-Version 3.9.8, no changes needed
+
+ -- Dr. Tobias Quathamer <toddy@debian.org>  Fri, 20 Jan 2017 10:31:18 +0100
+
+verilator (3.890-1) unstable; urgency=medium
+
+  * Team upload.
+  * Imported Upstream version 3.890
+  * Refresh patch
+  * Update d/copyright
+
+ -- Dr. Tobias Quathamer <toddy@debian.org>  Tue, 20 Dec 2016 23:45:19 +0100
+
+verilator (3.874-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Add libfl-dev to Build-Depends.
+    Thanks to Helmut Grohne <helmut@subdivi.de> (Closes: #846454)
+  * Use new and secure URL for Vcs-* fields
+
+ -- Dr. Tobias Quathamer <toddy@debian.org>  Fri, 16 Dec 2016 20:51:50 +0100
+
+verilator (3.874-1) unstable; urgency=medium
+
+  * Upload to unstable.
+  * Drop patches that got merged upstream: install_all_manpages.diff,
+    typos.diff
+  * Add pkgconfig.diff patch to remove un-necessary 'libdir' field from
+    pkgconfig file. lintian complained that this field had a multi-arch.
+    value, yet the file is installed in /usr/share/pkgconfig
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 07 Jun 2015 16:06:17 +0200
+
+verilator (3.872-2) unstable; urgency=medium
+
+  * Upload to unstable.
+  * debian/patches/*: Added DEP-3 patch headers.
+  * Remove debian/gbp.conf, not needed in master branch.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sun, 26 Apr 2015 16:20:52 +0200
+
+verilator (3.872-1) experimental; urgency=medium
+
+  * New upstream release.
+  * debian/patches/shebang.diff: patch verilator_coverage
+  * Install all manuals:
+    + Added install_all_manpages.diff patch to generate/install manpages for
+      verilator_profcfunc & verilator_coverage
+    + Remove debian/manpages, debian/verilator_profcfunc.1
+    + debian/links: added verilator_coverage_bin_dbg.1 -> verilator_coverage.1
+      symlink.
+  * debian/copyright: Update copyright format & years.
+  * Added typos.diff patch to fix typos.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Mon, 06 Apr 2015 13:50:47 +0200
+
+verilator (3.870-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Sat, 14 Feb 2015 09:08:35 +0200
+
+verilator (3.868-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Tue, 23 Dec 2014 10:52:44 +0200
+
+verilator (3.866-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Added debian/gbp.conf to set debian branch to experimental.
+  * Update my email address.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>  Wed, 26 Nov 2014 09:41:28 +0200
+
+verilator (3.864-1) unstable; urgency=medium
+
+  * New upstream release.
+  * debian/upstream/metadata: Add upstream metadata information
+  * debian/control: Bump Standards-Version to 3.9.6
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 28 Sep 2014 12:18:43 +0200
+
+verilator (3.862-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 17 Jun 2014 19:59:50 +0300
+
+verilator (3.860-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 20 May 2014 17:30:12 +0300
+
+verilator (3.856-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 16 Mar 2014 21:30:31 +0200
+
+verilator (3.855-1) unstable; urgency=low
+
+  * New upstream release.
+  * Refreshed shebang.diff patch.
+  * debian/copyright: update copyright years
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Mon, 27 Jan 2014 10:44:06 +0200
+
+verilator (3.854-1) unstable; urgency=low
+
+  * New upstream release.
+  * debian/control: Bumped Standards-Version to 3.9.5
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 03 Dec 2013 09:22:24 +0200
+
+verilator (3.853-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 01 Oct 2013 23:09:16 +0200
+
+verilator (3.852-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Mon, 30 Sep 2013 17:12:08 +0200
+
+verilator (3.851-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sat, 24 Aug 2013 15:28:02 +0200
+
+verilator (3.850-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Mon, 10 Jun 2013 09:46:14 +0200
+
+verilator (3.847-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Mon, 20 May 2013 17:18:43 +0200
+
+verilator (3.846-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 24 Mar 2013 18:38:33 +0200
+
+verilator (3.845-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 10 Feb 2013 17:14:43 +0200
+
+verilator (3.844-1) unstable; urgency=low
+
+  * New upstream release.
+  * debian/copyright: Updated copyright years.
+  * Refresh patch.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 13 Jan 2013 11:25:29 +0200
+
+verilator (3.843-1) unstable; urgency=low
+
+  * New upstream release.
+  * debian/control:
+    + Bumped Standards-Version to 3.9.4
+    + Remove obsolete DMUA field
+    + Use canonical URIs in VCS-* fields
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Thu, 03 Jan 2013 12:52:18 +0200
+
+verilator (3.841-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Thu, 06 Sep 2012 11:30:26 +0200
+
+verilator (3.840-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Wed, 01 Aug 2012 11:36:02 +0200
+
+verilator (3.833-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Wed, 18 Apr 2012 17:14:05 +0200
+
+verilator (3.832-1) unstable; urgency=low
+
+  * New upstream release.
+  * Bumped compat level to 9.
+  * debian/control: Updated Standards-Version to 3.9.3
+  * debian/copyright: Updated copyright format & years.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Thu, 08 Mar 2012 16:34:21 +0200
+
+verilator (3.831-1) unstable; urgency=low
+
+  * New upstream release.
+  * Refreshed patch: shebang.diff
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sat, 11 Feb 2012 15:00:59 +0200
+
+verilator (3.830-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 29 Nov 2011 16:48:53 +0200
+
+verilator (3.824-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Wed, 26 Oct 2011 05:38:30 +0200
+
+verilator (3.821-1) unstable; urgency=low
+
+  * New upstream release.
+  * Dropped Fix-PowerPC-runtime-error.patch patch as it is included in new
+    upstream release
+  * debian/copyright: Updated copyright format
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 18 Sep 2011 14:30:17 +0200
+
+verilator (3.820-2) unstable; urgency=low
+
+  * Cherry-picked Fix-PowerPC-runtime-error.patch from upstream VCS
+    (Closes: #598256)
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Tue, 23 Aug 2011 13:15:42 +0200
+
+verilator (3.820-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 31 Jul 2011 07:18:48 +0200
+
+verilator (3.813-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Thu, 07 Jul 2011 13:53:39 +0200
+
+verilator (3.812-1) unstable; urgency=low
+
+  * New upstream release.
+  * debian/copyright: Updated copyright years
+  * debian/control: Bumped Standards-Version to 3.9.2
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sat, 09 Apr 2011 23:21:43 +0200
+
+verilator (3.811-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Wed, 16 Feb 2011 17:11:11 +0200
+
+verilator (3.810-1) unstable; urgency=low
+
+  * New upstream release.
+  * Refreshed shebang.diff patch
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sat, 22 Jan 2011 10:08:37 +0200
+
+verilator (3.805-1) unstable; urgency=low
+
+  * New upstream release.
+  * Upload to unstable.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 07 Nov 2010 10:32:20 +0200
+
+verilator (3.804-1) experimental; urgency=low
+
+  * New upstream release
+  * Bumped compat level to 8
+  * debian/control: Bumped Standards-Version to 3.9.1, no changes needed.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sun, 26 Sep 2010 19:21:30 +0300
+
+verilator (3.803-1) unstable; urgency=low
+
+  * New upstream release.
+  * Removed patch typos.diff as it got applied upstream
+  * debian/control: Bumped Standards-Version to 3.9.0 (no changes
+    needed)
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Thu, 15 Jul 2010 21:00:20 +0300
+
+verilator (3.802-1) unstable; urgency=low
+
+  * New upstream release.
+  * Removed install_perms.diff patche, as it got applied upstream.
+  * Refreshed typos.diff patch to fix a new typo, and remove fixes that got
+    applied upstream.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Sat, 01 May 2010 22:56:15 +0300
+
+verilator (3.801-1) unstable; urgency=low
+
+  * New upstream release (Closes: #577187)
+  * Switched to 3.0 (quilt) source format.
+  * debian/control:
+    + Set pkg-electronics as Maintainer and add myself to Uploaders.
+    + Bumped Standards-Version to 3.8.4
+    + Added proper Vcs-* fields.
+    + Removed "the" from package description.
+    + Added DMUA
+  * debian/docs:
+    + Remove README & readme.pod since they do not provide useful information
+      to user.
+    + Added verilator.html & verilator.pdf
+  * debian/watch: set the upstream URL to one that can be checked.
+  * Added manpage for verilator_profcfunc
+  * Added debian/links, debian/doc-base, debian/manpages
+  * Remove debian/dirs
+  * debian/rules:
+    + No more need to override dh_auto_test since upstream now skips SystemC
+      tests if SystemC is not installed.
+    + No need to override dh_auto_install
+    + Override dh_installexamples to move examples dir from
+      /usr/share/verilator to /usr/share/doc/verilator
+  * Added install_perms.diff patch to install data files without executable
+    permissions.
+  * Added typos.diff patch to fix some spelling mistakes in verilator
+    executable & manpage.
+  * Added shebang.diff patch to add proper shebangs.
+  * debian/copyright:
+    + Converted to machine-readable format.
+    + Changed packaging license to match that of upstream.
+
+ -- أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@sabily.org>  Wed, 21 Apr 2010 23:33:46 +0200
+
+verilator (3.800-5) unstable; urgency=low
+
+  * prevent make from running test and failing because SystemC is not present
+  * now using override_dh_auto_test instead of override_dh_auto_make
+
+ -- Iztok Jeras <iztok.jeras@gmail.com>  Mon, 08 Feb 2010 19:51:39 +0100
+
+verilator (3.800-4) unstable; urgency=low
+
+  * prevent make from running test and failing because SystemC is not present
+
+ -- Iztok Jeras <iztok.jeras@gmail.com>  Mon, 08 Feb 2010 11:06:10 +0100
+
+verilator (3.800-3) unstable; urgency=low
+
+  * Added bison to dependencies
+
+ -- Iztok Jeras <iztok.jeras@gmail.com>  Mon, 08 Feb 2010 11:06:10 +0100
+
+verilator (3.800-2) unstable; urgency=low
+
+  * Added flex to dependencies
+
+ -- Iztok Jeras <iztok.jeras@gmail.com>  Mon, 08 Feb 2010 10:51:20 +0100
+
+verilator (3.800-1) unstable; urgency=low
+
+  * Initial release
+
+ -- Iztok Jeras <iztok.jeras@gmail.com>  Mon, 08 Feb 2010 07:52:28 +0100

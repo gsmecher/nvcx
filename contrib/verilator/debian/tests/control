@@ -1,0 +1,3 @@
+Tests: make-hello-c
+Depends: verilator
+Architecture: !armel

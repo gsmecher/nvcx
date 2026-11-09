@@ -1,0 +1,443 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Graeme Smecher <gsmecher@t0.technology>
+Date: Sun, 8 Nov 2026 11:12:05 -0700
+Subject: [PATCH] Fix internal error on force/release of whole unpacked arrays
+ (#9090)
+
+  logic [3:0] a[2], b[2];
+  force a = '{default: 0};  // sliced into element forces
+  release a;                // Internal Error: Whole unpacked-array
+                            // force/release should have been lowered
+                            // via element selections
+  force a = b;              // likewise
+  assign a = b;             // likewise
+
+V3Force handles force, release, assign and deassign of an unpacked array
+only by element, and relies on V3Slice to split them. V3Slice never split
+a release, deassign or procedural assign, and left a force whole for a
+copy between arrays of one type, with -fno-slice, or above
+--fslice-element-limit. It now always splits these. Xilinx's XPM CDC
+macros force and release whole arrays to model GSR.
+Bug: https://github.com/verilator/verilator/issues/9090
+Forwarded: https://github.com/verilator/verilator/pull/9091
+Last-Update: 2026-11-08
+---
+ src/V3Slice.cpp                               |  42 ++++-
+ .../t/t_force_release_unpacked_whole.py       |  18 ++
+ .../t/t_force_release_unpacked_whole.v        | 172 ++++++++++++++++++
+ .../t/t_force_release_unpacked_whole_limit.py |  20 ++
+ .../t_force_release_unpacked_whole_noslice.py |  20 ++
+ .../t/t_force_unpacked_whole_unsup.out        |  14 ++
+ .../t/t_force_unpacked_whole_unsup.py         |  16 ++
+ test_regress/t/t_force_unpacked_whole_unsup.v |  19 ++
+ 8 files changed, 318 insertions(+), 3 deletions(-)
+ create mode 100755 test_regress/t/t_force_release_unpacked_whole.py
+ create mode 100644 test_regress/t/t_force_release_unpacked_whole.v
+ create mode 100755 test_regress/t/t_force_release_unpacked_whole_limit.py
+ create mode 100755 test_regress/t/t_force_release_unpacked_whole_noslice.py
+ create mode 100644 test_regress/t/t_force_unpacked_whole_unsup.out
+ create mode 100755 test_regress/t/t_force_unpacked_whole_unsup.py
+ create mode 100644 test_regress/t/t_force_unpacked_whole_unsup.v
+
+diff --git a/src/V3Slice.cpp b/src/V3Slice.cpp
+index ec0ca73a4..3a5bf22c2 100644
+--- a/src/V3Slice.cpp
++++ b/src/V3Slice.cpp
+@@ -158,6 +158,19 @@ class SliceVisitor final : public VNVisitor {
+         AstNode* stp = nodep->rhsp();
+         const AstUnpackArrayDType* const arrayp = VN_CAST(dtp, UnpackArrayDType);
+         if (!arrayp) return false;
++
++        // A force or procedural assign must be expanded, as V3Force handles them only by element
++        const bool byElement = VN_IS(nodep, AssignForce) || VN_IS(nodep, AssignCont);
++        if (byElement && (VN_IS(stp, CvtPackedToArray) || VN_IS(stp, CvtQueueToUnpack))) {
++            nodep->v3warn(E_UNSUPPORTED,
++                          "Unsupported: "
++                              << (VN_IS(nodep, AssignForce) ? "Force" : "Procedural assign")
++                              << " of whole unpacked array from "
++                              << (VN_IS(stp, CvtQueueToUnpack) ? "queue"
++                                                               : "streaming expression"));
++            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
++            return true;
++        }
+         if (VN_IS(stp, CvtPackedToArray)) return false;
+         if (VN_IS(stp, CvtQueueToUnpack)) return false;
+         if (VN_IS(stp, CReset)) return false;
+@@ -165,7 +178,7 @@ class SliceVisitor final : public VNVisitor {
+         // Any isSc variables must be expanded regardless of --fno-slice
+         const bool hasSc
+             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
+-        if (!hasSc && !v3Global.opt.fSlice()) {
++        if (!hasSc && !byElement && !v3Global.opt.fSlice()) {
+             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
+             return false;
+         }
+@@ -173,7 +186,7 @@ class SliceVisitor final : public VNVisitor {
+         // Skip optimization if array is too large
+         const int elements = arrayp->rangep()->elementsConst();
+         const int elementLimit = v3Global.opt.fSliceElementLimit();
+-        if (elements > elementLimit && elementLimit > 0) {
++        if (elements > elementLimit && elementLimit > 0 && !byElement) {
+             ++m_statSliceElementSkips;
+             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
+             return false;
+@@ -182,7 +195,8 @@ class SliceVisitor final : public VNVisitor {
+         // Skip if this is a simple a = b assignment of identical arrays
+         if (AstVarRef* const lhsp = VN_CAST(nodep->lhsp(), VarRef)) {
+             if (AstVarRef* const rhsp = VN_CAST(nodep->rhsp(), VarRef)) {
+-                if (!hasSc && lhsp->dtypep()->skipRefp()->sameTree(rhsp->dtypep()->skipRefp())) {
++                if (!hasSc && !byElement
++                    && lhsp->dtypep()->skipRefp()->sameTree(rhsp->dtypep()->skipRefp())) {
+                     m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
+                     return false;
+                 }
+@@ -226,6 +240,28 @@ class SliceVisitor final : public VNVisitor {
+         iterateChildren(nodep);
+     }
+ 
++    // As for a force or procedural assign: release or deassign each element of an unpacked
++    // array
++    template <typename T_Stmt>
++    void sliceRelease(T_Stmt* nodep) {
++        const AstUnpackArrayDType* const arrayp
++            = VN_CAST(nodep->lhsp()->dtypep()->skipRefp(), UnpackArrayDType);
++        if (!arrayp) return;
++        VL_RESTORER(m_assignError);
++        m_assignError = false;
++        const int elements = arrayp->rangep()->elementsConst();
++        AstNode* newlistp = nullptr;
++        for (int elemIdx = 0; elemIdx < elements; ++elemIdx) {
++            newlistp = AstNode::addNext(
++                newlistp, new T_Stmt{nodep->fileline(),
++                                     cloneAndSel(nodep->lhsp(), elements, elemIdx, elemIdx != 0)});
++        }
++        nodep->replaceWith(newlistp);
++        VL_DO_DANGLING(pushDeletep(nodep), nodep);
++    }
++    void visit(AstRelease* nodep) override { sliceRelease(nodep); }
++    void visit(AstDeassign* nodep) override { sliceRelease(nodep); }
++
+     void visit(AstNodeCons* nodep) override {
+         VL_RESTORER(m_okConsArray);
+         m_okConsArray = true;
+diff --git a/test_regress/t/t_force_release_unpacked_whole.py b/test_regress/t/t_force_release_unpacked_whole.py
+new file mode 100755
+index 000000000..6fe7d000c
+--- /dev/null
++++ b/test_regress/t/t_force_release_unpacked_whole.py
+@@ -0,0 +1,18 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expect definition
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms of either the GNU Lesser General Public License Version 3
++# or the Perl Artistic License Version 2.0.
++# SPDX-FileCopyrightText: 2026 Wilson Snyder
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('simulator')
++
++test.compile(verilator_flags2=["--binary"])
++
++test.execute()
++
++test.passes()
+diff --git a/test_regress/t/t_force_release_unpacked_whole.v b/test_regress/t/t_force_release_unpacked_whole.v
+new file mode 100644
+index 000000000..9402972b6
+--- /dev/null
++++ b/test_regress/t/t_force_release_unpacked_whole.v
+@@ -0,0 +1,172 @@
++// DESCRIPTION: Verilator: Verilog Test module
++//
++// This file ONLY is placed under the Creative Commons Public Domain
++// SPDX-FileCopyrightText: 2026 Graeme Smecher
++// SPDX-License-Identifier: CC0-1.0
++
++// verilog_format: off
++`define stop $stop
++`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
++// verilog_format: on
++
++// Force and release of a whole unpacked array, as Xilinx's XPM CDC models
++// do to mimic GSR (force ff = '{default:0}; ... release ff;), and of a row
++// or slice of one
++
++module t;
++
++  typedef struct {
++    logic [3:0] a;
++    logic [3:0] b;
++  } ps_t;
++
++  logic [3:0] var_arr[2];  // A variable: keeps the forced value after release
++  wire [3:0] net_arr[2];  // A net: returns to its driver on release
++  logic [3:0] src[2];
++  logic [3:0] arr2d[2][3];  // Two unpacked dimensions
++  logic [3:0] row[2][3];  // Forced by row
++  logic [3:0] slc[4];  // Forced by slice
++  logic [3:0] cpy[2];  // Forced to another array: follows it
++  logic [3:0] elm[2];  // Forced by element, released whole
++  logic [3:0] pca[2];  // Procedural continuous assign, then deassign
++  logic [3:0] rev[1:0];  // Opposite direction to src: pairs left to right
++  logic [3:0] rvp[1:0];  // Forced to a pattern, which is left to right too
++  ps_t sta[2];  // Of structs, forced to a struct variable: follows it
++  ps_t psv;
++  logic [3:0] fca[2] /*verilator forceable*/;  // Also forceable externally
++
++  assign net_arr[0] = src[0];
++  assign net_arr[1] = src[1];
++
++  initial begin
++    var_arr[0] = 4'h1;
++    var_arr[1] = 4'h2;
++    src[0] = 4'h3;
++    src[1] = 4'h4;
++    arr2d = '{'{4'h1, 4'h2, 4'h3}, '{4'h4, 4'h5, 4'h6}};
++    row = '{'{4'h1, 4'h2, 4'h3}, '{4'h4, 4'h5, 4'h6}};
++    slc = '{4'h1, 4'h2, 4'h3, 4'h4};
++    cpy = '{4'h1, 4'h2};
++    elm = '{4'h1, 4'h2};
++    pca = '{4'h1, 4'h2};
++    rev = '{4'h1, 4'h2};
++    rvp = '{4'h1, 4'h2};
++    sta = '{'{4'h1, 4'h2}, '{4'h3, 4'h4}};
++    psv = '{4'h5, 4'h6};
++    fca = '{4'h1, 4'h2};
++    #1;
++    `checkh(net_arr[0], 4'h3);
++    `checkh(net_arr[1], 4'h4);
++
++    force var_arr = '{default: 4'h0};
++    force net_arr = '{4'h5, 4'h6};
++    force arr2d = '{default: 4'hf};
++    force row[1] = '{4'ha, 4'hb, 4'hc};
++    force slc[1:2] = src;
++    force cpy = src;
++    force elm[0] = 4'hc;
++    force elm[1] = 4'hd;
++    // verilator lint_off IEEEMAYDEPRECATE
++    assign pca = src;
++    // verilator lint_on IEEEMAYDEPRECATE
++    force rev = src;
++    force rvp = '{4'ha, 4'hb};
++    force sta = '{default: psv};
++    force fca = '{4'h5, 4'h6};
++    #1;
++    `checkh(arr2d[0][0], 4'hf);
++    `checkh(arr2d[1][2], 4'hf);
++    `checkh(row[0][0], 4'h1);
++    `checkh(row[1][0], 4'ha);
++    `checkh(row[1][2], 4'hc);
++    `checkh(slc[0], 4'h1);
++    `checkh(slc[1], 4'h3);
++    `checkh(slc[2], 4'h4);
++    `checkh(slc[3], 4'h4);
++    `checkh(cpy[0], 4'h3);
++    `checkh(cpy[1], 4'h4);
++    `checkh(elm[0], 4'hc);
++    `checkh(elm[1], 4'hd);
++    `checkh(pca[0], 4'h3);
++    `checkh(pca[1], 4'h4);
++    `checkh(rev[1], 4'h3);
++    `checkh(rev[0], 4'h4);
++    `checkh(rvp[1], 4'ha);
++    `checkh(rvp[0], 4'hb);
++    `checkh(sta[0].a, 4'h5);
++    `checkh(sta[1].b, 4'h6);
++    `checkh(fca[0], 4'h5);
++    `checkh(fca[1], 4'h6);
++    `checkh(var_arr[0], 4'h0);
++    `checkh(var_arr[1], 4'h0);
++    `checkh(net_arr[0], 4'h5);
++    `checkh(net_arr[1], 4'h6);
++
++    var_arr[0] = 4'h7;  // Ignored while forced
++    src[1] = 4'h8;
++    sta[1].b = 4'h9;  // Ignored while forced
++    fca[0] = 4'h7;  // Ignored while forced
++    psv.a = 4'h7;
++    #1;
++    `checkh(var_arr[0], 4'h0);
++    `checkh(net_arr[1], 4'h6);
++    `checkh(cpy[1], 4'h8);  // A force is continuous
++    `checkh(rev[0], 4'h8);
++    `checkh(pca[1], 4'h8);
++    `checkh(sta[1].a, 4'h7);
++    `checkh(sta[1].b, 4'h6);
++    `checkh(fca[0], 4'h5);
++
++    release var_arr;
++    release net_arr;
++    release arr2d;
++    release row[1];
++    release slc[1:2];
++    release cpy;
++    release elm;
++    // verilator lint_off IEEEMAYDEPRECATE
++    deassign pca;
++    // verilator lint_on IEEEMAYDEPRECATE
++    release sta;
++    release fca;
++    #1;
++    `checkh(arr2d[1][2], 4'hf);
++    `checkh(row[1][2], 4'hc);
++    `checkh(slc[2], 4'h8);  // Last forced value: src[1] changed
++    `checkh(cpy[1], 4'h8);
++    `checkh(elm[0], 4'hc);
++    `checkh(pca[1], 4'h8);
++    `checkh(sta[1].a, 4'h7);
++    `checkh(fca[0], 4'h5);  // Keeps the forced value until next written
++    `checkh(fca[1], 4'h6);
++    `checkh(var_arr[0], 4'h0);  // Keeps the forced value until next written
++    `checkh(var_arr[1], 4'h0);
++    `checkh(net_arr[0], 4'h3);
++    `checkh(net_arr[1], 4'h8);
++
++    var_arr[1] = 4'h9;
++    arr2d[1][2] = 4'h9;
++    row[1][2] = 4'h9;
++    slc[2] = 4'h9;
++    cpy[1] = 4'h9;
++    elm[0] = 4'h9;
++    pca[1] = 4'h9;
++    sta[1].b = 4'h9;
++    fca[1] = 4'h9;
++    #1;
++    `checkh(var_arr[1], 4'h9);
++    `checkh(arr2d[1][2], 4'h9);
++    `checkh(row[1][2], 4'h9);
++    `checkh(slc[2], 4'h9);
++    `checkh(cpy[1], 4'h9);
++    `checkh(elm[0], 4'h9);
++    `checkh(pca[1], 4'h9);
++    `checkh(sta[1].b, 4'h9);
++    `checkh(fca[0], 4'h5);
++    `checkh(fca[1], 4'h9);
++
++    $write("*-* All Finished *-*\n");
++    $finish;
++  end
++
++endmodule
+diff --git a/test_regress/t/t_force_release_unpacked_whole_limit.py b/test_regress/t/t_force_release_unpacked_whole_limit.py
+new file mode 100755
+index 000000000..48227f583
+--- /dev/null
++++ b/test_regress/t/t_force_release_unpacked_whole_limit.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expect definition
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms of either the GNU Lesser General Public License Version 3
++# or the Perl Artistic License Version 2.0.
++# SPDX-FileCopyrightText: 2026 Wilson Snyder
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('simulator')
++
++test.top_filename = "t/t_force_release_unpacked_whole.v"
++
++test.compile(verilator_flags2=["--binary", "--fslice-element-limit", "1"])
++
++test.execute()
++
++test.passes()
+diff --git a/test_regress/t/t_force_release_unpacked_whole_noslice.py b/test_regress/t/t_force_release_unpacked_whole_noslice.py
+new file mode 100755
+index 000000000..0976f742f
+--- /dev/null
++++ b/test_regress/t/t_force_release_unpacked_whole_noslice.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expect definition
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms of either the GNU Lesser General Public License Version 3
++# or the Perl Artistic License Version 2.0.
++# SPDX-FileCopyrightText: 2026 Wilson Snyder
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('simulator')
++
++test.top_filename = "t/t_force_release_unpacked_whole.v"
++
++test.compile(verilator_flags2=["--binary", "-fno-slice"])
++
++test.execute()
++
++test.passes()
+diff --git a/test_regress/t/t_force_unpacked_whole_unsup.out b/test_regress/t/t_force_unpacked_whole_unsup.out
+new file mode 100644
+index 000000000..0d51f9ce1
+--- /dev/null
++++ b/test_regress/t/t_force_unpacked_whole_unsup.out
+@@ -0,0 +1,14 @@
++%Error-UNSUPPORTED: t/t_force_unpacked_whole_unsup.v:14:5: Unsupported: Force of whole unpacked array from queue
++   14 |     force a = q;
++      |     ^~~~~
++                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
++%Error-UNSUPPORTED: t/t_force_unpacked_whole_unsup.v:15:5: Unsupported: Force of whole unpacked array from streaming expression
++   15 |     force a = {>>{p}};
++      |     ^~~~~
++%Error-UNSUPPORTED: t/t_force_unpacked_whole_unsup.v:16:5: Unsupported: Procedural assign of whole unpacked array from queue
++   16 |     assign a = q;
++      |     ^~~~~~
++%Error-UNSUPPORTED: t/t_force_unpacked_whole_unsup.v:17:5: Unsupported: Procedural assign of whole unpacked array from streaming expression
++   17 |     assign a = {>>{p}};
++      |     ^~~~~~
++%Error: Exiting due to
+diff --git a/test_regress/t/t_force_unpacked_whole_unsup.py b/test_regress/t/t_force_unpacked_whole_unsup.py
+new file mode 100755
+index 000000000..344a4e20a
+--- /dev/null
++++ b/test_regress/t/t_force_unpacked_whole_unsup.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expect definition
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms of either the GNU Lesser General Public License Version 3
++# or the Perl Artistic License Version 2.0.
++# SPDX-FileCopyrightText: 2026 Wilson Snyder
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('vlt')
++
++test.lint(fails=True, expect_filename=test.golden_filename)
++
++test.passes()
+diff --git a/test_regress/t/t_force_unpacked_whole_unsup.v b/test_regress/t/t_force_unpacked_whole_unsup.v
+new file mode 100644
+index 000000000..0922219fa
+--- /dev/null
++++ b/test_regress/t/t_force_unpacked_whole_unsup.v
+@@ -0,0 +1,19 @@
++// DESCRIPTION: Verilator: Verilog Test module
++//
++// This file ONLY is placed under the Creative Commons Public Domain
++// SPDX-FileCopyrightText: 2026 Graeme Smecher
++// SPDX-License-Identifier: CC0-1.0
++
++/* verilator lint_off IEEEMAYDEPRECATE */
++module t;
++  logic [3:0] a[2];
++  logic [3:0] q[$];
++  logic [7:0] p;
++
++  initial begin
++    force a = q;
++    force a = {>>{p}};
++    assign a = q;
++    assign a = {>>{p}};
++  end
++endmodule

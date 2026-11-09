@@ -1,0 +1,5 @@
+# This is a false positive.
+source: package-does-not-install-examples [examples/]
+
+# Can be ignored. it's all testing data.
+source: very-long-line-length-in-source-file * [test_regress*]

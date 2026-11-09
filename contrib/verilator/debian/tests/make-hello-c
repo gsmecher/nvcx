@@ -1,0 +1,11 @@
+#!/bin/sh
+# autopkgtest check: test_dff from README.md
+
+set -e
+
+WORKDIR=$(mktemp -d)
+trap "rm -rf $WORKDIR" 0 INT QUIT ABRT PIPE TERM
+cd $WORKDIR
+
+cp -a /usr/share/verilator/examples/make_hello_c/* .
+make

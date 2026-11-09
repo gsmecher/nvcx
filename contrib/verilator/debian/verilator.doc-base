@@ -1,0 +1,10 @@
+Document: verilator
+Title: Verilator Manual
+Author: Wilson Snyder <wsnyder@wsnyder.org>
+Abstract: This document is a manual for Verilator which describes how it can be
+ used to compile Verilog code into C++/SystemC
+Section: Science/Electronics
+
+Format: HTML
+Index: /usr/share/doc/verilator/html/index.html
+Files: /usr/share/doc/verilator/html/*.html

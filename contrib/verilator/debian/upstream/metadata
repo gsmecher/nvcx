@@ -1,0 +1,13 @@
+---
+Bug-Database: https://github.com/verilator/verilator/issues
+Bug-Submit: https://github.com/verilator/verilator/issues/new
+Contact: wsnyder@wsnyder.org
+Documentation: https://verilator.org/guide/latest/
+FAQ: https://github.com/verilator/verilator/blob/master/README.rst
+Repository: https://github.com/verilator/verilator.git
+Repository-Browse: https://github.com/verilator/verilator
+Registry:
+ - Name: guix
+   Entry: verilator
+ - Name: conda:conda-forge
+   Entry: verilator

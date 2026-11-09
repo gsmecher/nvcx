@@ -1,0 +1,46 @@
+From 4c88298991d4858df2a6437592c3d342a175fe1c Mon Sep 17 00:00:00 2001
+From: Graeme Smecher <gsmecher@localhost>
+Date: Fri, 6 Nov 2026 18:06:31 -0700
+Subject: [PATCH] Fix "tristate in top-level IO" for Z-tested input-only
+ submodule ports
+
+Description: A submodule that only tests an input port for Z (e.g. Xilinx
+ UNISIM models' `assign A_in = (A === 1'bz) || A;`) has no __out variable for
+ that port, so V3Tristate reported "Unsupported: tristate in top-level IO" at
+ every non-top instantiation, even when the connected expression is an
+ ordinary 2-state net or constant. When the pin is an input-only connection in
+ a non-top module and no variable in the pin expression is tristate, tie the
+ port's __en to all ones (fully driven), so `=== 1'bz` evaluates false.
+ Prototype: t/t_tri_compass_bad (expected-fail) now passes and would need to
+ become a positive test upstream; t_tri*/pull*/strength*/altera_lpm tests
+ otherwise pass.
+Forwarded: no
+Last-Update: 2026-11-07
+---
+
+diff --git a/src/V3Tristate.cpp b/src/V3Tristate.cpp
+--- a/src/V3Tristate.cpp
++++ b/src/V3Tristate.cpp
+@@ -2167,7 +2167,21 @@
+             AstVar* const outModVarp = m_varAux(nodep->modVarp()).outVarp;
+             if (!outModVarp) {
+                 // At top, no need for __out as might be input only. Otherwise resolvable.
+-                if (!m_modp->isTop()) {
++                // Input-only port whose submodule merely tests for Z (e.g. `i === 1'bz`,
++                // as in vendor cell models), connected to a non-tristate expression:
++                // the connection is always fully driven, so tie the enable to all ones.
++                bool exprTristate = false;
++                if (inDeclProcessing) {
++                    nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
++                        if (m_tgraph.isTristate(refp->varp())) exprTristate = true;
++                    });
++                }
++                if (!m_modp->isTop() && inDeclProcessing && !exprTristate) {
++                    m_modp->addStmtsp(new AstAlways{new AstAssignW{
++                        nodep->fileline(),
++                        new AstVarRef{nodep->fileline(), enVarp, VAccess::WRITE},
++                        newAllZerosOrOnes(enVarp, true)}});
++                } else if (!m_modp->isTop()) {
+                     nodep->v3warn(E_UNSUPPORTED, "Unsupported: tristate in top-level IO: "
+                                                      << nodep->prettyNameQ());
+                 }

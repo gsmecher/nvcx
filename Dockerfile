@@ -1,3 +1,10 @@
+# Verilator, as nvcx packages it (contrib/verilator): Ubuntu 24.04's is too
+# old. Built in a stage of its own, so that only contrib/verilator changes
+# rebuild it.
+FROM ubuntu:24.04 AS verilator
+COPY contrib/verilator /tmp/verilator
+RUN DEB_BUILD_OPTIONS=nocheck /tmp/verilator/build-deb.sh /debs
+
 # Ubuntu 24.04 (an LTS release Vivado supports)
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -57,6 +64,11 @@ RUN cd /tmp/nvc && \
 	make -j"$(nproc)" && \
 	make install && \
 	rm -rf /tmp/nvc /tmp/nvc.tar.gz /tmp/patches
+
+COPY --from=verilator /debs/ /tmp/debs/
+RUN apt-get update -qq && \
+	apt-get install -y --no-install-recommends /tmp/debs/verilator_*.deb && \
+	rm -rf /var/lib/apt/lists/* /tmp/debs
 
 RUN sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8

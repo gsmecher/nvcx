@@ -1,0 +1,50 @@
+Source: verilator
+Section: electronics
+Maintainer: Debian Electronics Team <pkg-electronics-devel@lists.alioth.debian.org>
+Uploaders:
+ أحمد المحمودي (Ahmed El-Mahmoudy) <aelmahmoudy@users.sourceforge.net>,
+Build-Depends:
+ bison,
+ debhelper-compat (= 13),
+ dh-sequence-sphinxdoc <!nodoc>,
+ flex,
+ latexmk <!nodoc>,
+ libfl-dev,
+ libsystemc-dev [amd64 arm64 i386],
+ help2man,
+ python3,
+ python3-sphinx <!nodoc>,
+ python3-sphinx-rtd-theme <!nodoc>,
+ tex-gyre <!nodoc>,
+ texlive-latex-extra <!nodoc>,
+ python3-distro,
+ architecture-is-64-bit,
+Standards-Version: 4.7.4
+Homepage: http://www.veripool.org/wiki/verilator
+Vcs-Git: https://salsa.debian.org/electronics-team/verilator.git
+Vcs-Browser: https://salsa.debian.org/electronics-team/verilator
+
+Package: verilator
+Architecture: any
+Depends:
+ python3,
+ g++,
+ make,
+ ccache,
+ ${misc:Depends},
+ ${perl:Depends},
+ ${shlibs:Depends},
+ ${sphinxdoc:Depends},
+Built-Using:
+ ${sphinxdoc:Built-Using},
+Recommends:
+ libsystemc-dev [amd64 arm64 i386],
+Suggests:
+ gtkwave,
+Description: fast free Verilog simulator
+ Verilator is the fastest free Verilog HDL simulator, and beats many commercial
+ simulators. It compiles synthesizable Verilog (not test-bench code!), plus
+ some PSL, SystemVerilog and Synthesis assertions into C++ or SystemC code.
+ It is designed for large projects where fast simulation performance is of
+ primary concern, and is especially well suited to generate executable models
+ of CPUs for embedded software design teams.

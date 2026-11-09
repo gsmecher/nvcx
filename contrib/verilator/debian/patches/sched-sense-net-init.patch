@@ -1,0 +1,393 @@
+Description: Fire change sensitivities on continuously assigned nets at time 0
+ A net driven by an undelayed continuous assignment takes its driver's value
+ at time 0 (IEEE 1800-2023 4.9.1, 6.6): in a four-state simulator such as
+ xsim, that is a change from z/x that wakes `always @(net)`. With --timing,
+ Verilator does not fire it (since 5a410e95a, #8911), except for nets driven
+ by a constant (61ff77472). Xilinx XPM models depend on it: xpm_fifo_axis in
+ packet mode with independent clocks keeps the packet count's carry in an
+ `always @(axis_rd_eop)` that must run at time 0, and without it presents
+ incomplete packets. Fire a change sensitivity at time 0 when it references a
+ variable driven by an undelayed continuous assignment (or a port
+ connection, 4.9.6), as for constant nets: not edge sensitivities, nor
+ variables with declaration initializers (6.8), nor delayed assignments.
+ Test: t_sched_sense_net_init{,_timing}.
+Forwarded: no (upstream chose otherwise in #8911; carried for nvcx, which
+ runs Verilator cores alongside xsim)
+Author: Graeme Smecher <gsmecher@t0.technology>
+Last-Update: 2026-11-07
+---
+diff --git a/src/V3Active.cpp b/src/V3Active.cpp
+index 80de97d54..15b64df75 100644
+--- a/src/V3Active.cpp
++++ b/src/V3Active.cpp
+@@ -587,6 +587,19 @@ class ActiveVisitor final : public VNVisitor {
+                     "Should not reach here when walking body without --timing");
+         if (!nodep->sensp()) return;  // Ignore sequential items (e.g.: initial, comb, etc.)
+ 
++        // A change sense on a continuously assigned signal fires at time 0: the signal is z
++        // (a net, IEEE 1800-2023 6.6) or x (a variable) until the continuous assignment is
++        // first evaluated at time 0 (4.9.1), which is a value change (9.4.2).  Not with a
++        // delay on the assignment or the net, which only schedules the update then; and not
++        // for a variable with a declaration initializer, set before any process starts
++        // (6.8).  Decided here, before V3Gate replaces the signal by its driver expression.
++        if (nodep->edgeType() == VEdgeType::ET_CHANGED
++            && nodep->sensp()->exists([](const AstVarRef* refp) {
++                   return refp->varp()->isContinuouslyUndelayed();
++               })) {
++            nodep->fireAtInit(true);
++        }
++
+         m_clockedProcess = true;
+         if (nodep->edgeType() != VEdgeType::ET_CHANGED) m_allChanged = false;
+ 
+diff --git a/src/V3AstNodeOther.h b/src/V3AstNodeOther.h
+index e6f311426..42a2bb4de 100644
+--- a/src/V3AstNodeOther.h
++++ b/src/V3AstNodeOther.h
+@@ -1972,6 +1972,7 @@ class AstSenItem final : public AstNode {
+     // @astgen op1 := sensp : Optional[AstNodeExpr] // Sensitivity expression
+     // @astgen op2 := condp : Optional[AstNodeExpr] // Sensitivity condition
+     VEdgeType m_edgeType;  // Edge type
++    bool m_fireAtInit = false;  // Change sense on a continuously assigned signal: fires at time 0
+ public:
+     class Combo {};  // for constructor type-overload selection
+     class Static {};  // for constructor type-overload selection
+@@ -1999,9 +2000,12 @@ public:
+     void dump(std::ostream& str) const override;
+     void dumpJson(std::ostream& str) const override;
+     bool sameNode(const AstNode* samep) const override {
+-        return edgeType() == VN_DBG_AS(samep, SenItem)->edgeType();
++        return edgeType() == VN_DBG_AS(samep, SenItem)->edgeType()
++               && fireAtInit() == VN_DBG_AS(samep, SenItem)->fireAtInit();
+     }
+     VEdgeType edgeType() const { return m_edgeType; }
++    bool fireAtInit() const { return m_fireAtInit; }
++    void fireAtInit(bool flag) { m_fireAtInit = flag; }
+     void edgeType(VEdgeType type) {
+         m_edgeType = type;
+         editCountInc();
+@@ -2365,6 +2369,7 @@ class AstVar final : public AstNode {
+     bool m_icoMaybeWritten : 1;  // Design might write this input signal - for ico change detect
+     bool m_isConst : 1;  // Table contains constant data
+     bool m_isContinuously : 1;  // Ever assigned continuously (for force/release)
++    bool m_isContinuouslyUndelayed : 1;  // Continuously assigned without a delay (updated at time 0)
+     bool m_hasStrengthAssignment : 1;  // Is on LHS of assignment with strength specifier
+     bool m_hasUserInit : 1;  // Has initial assignment by user at parse time
+     bool m_isPulldown : 1;  // Tri0
+@@ -2433,6 +2438,7 @@ class AstVar final : public AstNode {
+         m_icoMaybeWritten = false;
+         m_isConst = false;
+         m_isContinuously = false;
++        m_isContinuouslyUndelayed = false;
+         m_hasStrengthAssignment = false;
+         m_hasUserInit = false;
+         m_isPulldown = false;
+@@ -2612,6 +2618,7 @@ public:
+     void primaryIO(bool flag) { m_primaryIO = flag; }
+     void isConst(bool flag) { m_isConst = flag; }
+     void isContinuously(bool flag) { m_isContinuously = flag; }
++    void isContinuouslyUndelayed(bool flag) { m_isContinuouslyUndelayed = flag; }
+     void isIfaceParent(bool flag) { m_isIfaceParent = flag; }
+     void isIfaceArraySplit(bool flag) { m_isIfaceArraySplit = flag; }
+     void isInternal(bool flag) { m_isInternal = flag; }
+@@ -2683,6 +2690,7 @@ public:
+     string tag() const override { return m_tag; }
+     bool isAnsi() const { return m_ansi; }
+     bool isContinuously() const { return m_isContinuously; }
++    bool isContinuouslyUndelayed() const { return m_isContinuouslyUndelayed; }
+     bool isDeclTyped() const { return m_declTyped; }
+     bool isInout() const { return m_direction.isInout(); }
+     bool isInoutOrRef() const { return m_direction.isInoutOrRef(); }
+@@ -2780,6 +2788,7 @@ public:
+         // Note the method below too
+         if (fromp->attrFileDescr()) attrFileDescr(true);
+         if (fromp->isContinuously()) isContinuously(true);
++        if (fromp->isContinuouslyUndelayed()) isContinuouslyUndelayed(true);
+     }
+     void propagateSplitAttrFrom(const AstVar* fromp) {
+         // Splitting a variable (element/member/fragment); keep attributes
+diff --git a/src/V3AstNodes.cpp b/src/V3AstNodes.cpp
+index 905ef1aeb..2dd644608 100644
+--- a/src/V3AstNodes.cpp
++++ b/src/V3AstNodes.cpp
+@@ -3963,6 +3963,7 @@ void AstSelBit::dumpJson(std::ostream& str) const {
+ void AstSenItem::dump(std::ostream& str) const {
+     Super::dump(str);
+     str << " [" << edgeType().ascii() << "]";
++    if (fireAtInit()) str << " [INIT]";
+ }
+ void AstSenItem::dumpJson(std::ostream& str) const {
+     dumpJsonStr(str, "edgeType", edgeType().ascii());
+diff --git a/src/V3Const.cpp b/src/V3Const.cpp
+index 35371d964..8580b7618 100644
+--- a/src/V3Const.cpp
++++ b/src/V3Const.cpp
+@@ -3677,6 +3677,7 @@ class ConstVisitor final : public VNVisitor {
+ 
+                     // Remove identical expressions
+                     if (lItemp->edgeType() == rItemp->edgeType()) {
++                        if (rItemp->fireAtInit()) lItemp->fireAtInit(true);
+                         VL_DO_DANGLING(pushDeletep(rItemp->unlinkFrBack()), rItemp);
+                         nextp = lItemp;
+                     }
+diff --git a/src/V3Inst.cpp b/src/V3Inst.cpp
+index 551ac1246..c254be34f 100644
+--- a/src/V3Inst.cpp
++++ b/src/V3Inst.cpp
+@@ -33,7 +33,10 @@ VL_DEFINE_DEBUG_FUNCTIONS;
+ 
+ static void markContinuousLhs(AstNode* const nodep) {
+     nodep->foreach([](AstNodeVarRef* refp) {
+-        if (refp->access().isWriteOrRW()) refp->varp()->isContinuously(true);
++        if (refp->access().isWriteOrRW()) {
++            refp->varp()->isContinuously(true);
++            refp->varp()->isContinuouslyUndelayed(true);  // A port connection: no delay
++        }
+     });
+ }
+ 
+@@ -300,6 +303,7 @@ public:
+             } else {
+                 // V3 width should have range/extended to make the widths correct
+                 newvarp->isContinuously(true);
++                newvarp->isContinuouslyUndelayed(true);
+                 assignp = new AstAssignW{pinp->fileline(),
+                                          new AstVarRef{pinp->fileline(), newvarp, VAccess::WRITE},
+                                          pinexprp};
+diff --git a/src/V3LinkLValue.cpp b/src/V3LinkLValue.cpp
+index dc5501ffe..4fd6ab6f9 100644
+--- a/src/V3LinkLValue.cpp
++++ b/src/V3LinkLValue.cpp
+@@ -34,6 +34,7 @@ class LinkLValueVisitor final : public VNVisitor {
+ 
+     // STATE - for current visit position (use VL_RESTORER)
+     bool m_setContinuously = false;  // Set that var has some continuous assignment
++    bool m_setContinuouslyUndelayed = false;  // ... one without a delay (updated at time 0)
+     bool m_setForcedByCode = false;  // Set that var is the target of an AstAssignForce/AstRelease
+     bool m_setIfRand = false;  // Update VarRefs if var declared as rand
+     bool m_setStrengthSpecified = false;  // Set that var has assignment with strength specified.
+@@ -68,6 +69,9 @@ class LinkLValueVisitor final : public VNVisitor {
+             }
+             if (m_setContinuously) {
+                 nodep->varp()->isContinuously(true);
++                if (m_setContinuouslyUndelayed && !nodep->varp()->delayp()) {
++                    nodep->varp()->isContinuouslyUndelayed(true);
++                }
+                 // Strength may only be specified in continuous assignment,
+                 // so it is needed to check only if m_setContinuously is true
+                 if (m_setStrengthSpecified) nodep->varp()->hasStrengthAssignment(true);
+@@ -113,10 +117,12 @@ class LinkLValueVisitor final : public VNVisitor {
+     void visit(AstNodeAssign* nodep) override {
+         VL_RESTORER(m_setRefLvalue);
+         VL_RESTORER(m_setContinuously);
++        VL_RESTORER(m_setContinuouslyUndelayed);
+         VL_RESTORER(m_setStrengthSpecified);
+         {
+             m_setRefLvalue = VAccess::WRITE;
+             m_setContinuously = VN_IS(nodep, AssignW);
++            m_setContinuouslyUndelayed = m_setContinuously && !nodep->timingControlp();
+             if (const AstAssignW* const assignwp = VN_CAST(nodep, AssignW)) {
+                 if (assignwp->strengthSpecp()) m_setStrengthSpecified = true;
+             }
+diff --git a/src/V3SenExprBuilder.h b/src/V3SenExprBuilder.h
+index fdc4de88d..b1213db63 100644
+--- a/src/V3SenExprBuilder.h
++++ b/src/V3SenExprBuilder.h
+@@ -259,8 +259,10 @@ private:
+         case VEdgeType::ET_HYBRID: {
+             // If a change sense folded to a constant, run it once at time 0 only
+             if (VN_IS(senp, Const)) return {new AstConst{flp, AstConst::BitFalse{}}, true};
+-            // Hybrid needs to run on startup
+-            const bool fireAtInit = senItemp->edgeType() == VEdgeType::ET_HYBRID;
++            // Hybrid needs to run on startup, as does a change sense on a continuously
++            // assigned signal (see V3Active)
++            const bool fireAtInit
++                = senItemp->edgeType() == VEdgeType::ET_HYBRID || senItemp->fireAtInit();
+             if (VN_IS(senp->dtypep()->skipRefp(), UnpackArrayDType)) {
+                 // operand order reversed to avoid calling neq() method on non-VlUnpacked type, see
+                 // issue #5125
+diff --git a/test_regress/t/t_sched_sense_net_init.py b/test_regress/t/t_sched_sense_net_init.py
+new file mode 100755
+index 000000000..a3ab5b845
+--- /dev/null
++++ b/test_regress/t/t_sched_sense_net_init.py
+@@ -0,0 +1,18 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expected results
++#
++# Copyright 2026 by Wilson Snyder. This program is free software; you
++# can redistribute it and/or modify it under the terms of either the GNU
++# Lesser General Public License Version 3 or the Perl Artistic License
++# Version 2.0.
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('simulator')
++
++test.compile(verilator_flags2=["--binary"])
++
++test.execute()
++
++test.passes()
+diff --git a/test_regress/t/t_sched_sense_net_init.v b/test_regress/t/t_sched_sense_net_init.v
+new file mode 100644
+index 000000000..724db2d87
+--- /dev/null
++++ b/test_regress/t/t_sched_sense_net_init.v
+@@ -0,0 +1,129 @@
++// DESCRIPTION: Verilator: Verilog Test module
++//
++// This file ONLY is placed under the Creative Commons Public Domain
++// SPDX-FileCopyrightText: 2026 Graeme Smecher
++// SPDX-License-Identifier: CC0-1.0
++
++// A change sensitivity on a continuously assigned signal fires once at time 0.
++// IEEE 1800-2023: a net is z until it assumes the value of its drivers (6.6); a continuous
++// assignment process is evaluated at time zero (4.9.1), also the implicit one of a port
++// connection (4.9.6); that is a value change, which an event control observes (9.4.2).
++// A variable with a declaration initializer is set before any procedure starts (6.8), so
++// its initialization is not an event.
++//
++// Compiled with and without --timing (t_sched_sense_net_init_timing.py defines
++// WITH_TIMING): the processes below are scheduled differently in the two flows.
++
++`ifdef WITH_TIMING
++module t;
++  reg clk = 1'b0;
++  always #5 clk = ~clk;
++`else
++module t (
++    input wire clk
++);
++`endif
++
++  reg a = 1'b0;
++  reg b;
++  initial b = 1'b1;
++
++  // Net driven by logic, sensitivity declared after the driver
++  wire w = a & b;
++  reg fired_w = 1'b0;
++  always @(w) fired_w <= 1'b1;
++
++  // Net driven by logic, sensitivity declared before the driver
++  wire w2;
++  reg fired_w2 = 1'b0;
++  always @(w2) fired_w2 <= 1'b1;
++  assign w2 = a | b;
++
++  // Net driven by a submodule output (an implicit continuous assignment, 4.9.6)
++  wire w3;
++  reg fired_w3 = 1'b0;
++  always @(w3) fired_w3 <= 1'b1;
++  sub u_sub (.i(a), .o(w3));
++
++  // Net driven by a constant (as before)
++  wire wc = 1'b1;
++  reg fired_wc = 1'b0;
++  always @(wc) fired_wc <= 1'b1;
++
++  // Variable with a continuous assignment: x until its first evaluation
++  logic v2;
++  assign v2 = a ^ b;
++  reg fired_v2 = 1'b0;
++  always @(v2) fired_v2 <= 1'b1;
++
++  // Variable with a declaration initializer: no event (6.8)
++  reg v = 1'b0;
++  reg fired_v = 1'b0;
++  always @(v) fired_v <= 1'b1;
++
++  // Variable without an initializer, never written: no event
++  reg u;
++  reg fired_u = 1'b0;
++  always @(u) fired_u <= 1'b1;
++
++  // The pattern of xpm_fifo_axis (gaxis_pkt_fifo_ic): a pad set by a sensitivity on a net
++  // that is 0 after its first evaluation; without the time-0 event it would stay 0
++  wire rd_eop = a & b;  // 0 at time 0
++  reg pad0 = 1'b0;
++  reg pad1 = 1'b0;
++  always @(rd_eop) begin
++    if (rd_eop == 1'b0) begin
++      pad0 <= 1'b1;
++      pad1 <= 1'b1;
++    end else begin
++      pad0 <= 1'b0;
++      pad1 <= 1'b0;
++    end
++  end
++
++  // A suspendable process waiting on the same net (--timing only)
++  reg fired_t = 1'b0;
++`ifdef WITH_TIMING
++  task automatic wait_w;
++    @(w);
++    fired_t = 1'b1;
++  endtask
++  initial wait_w();
++`else
++  initial fired_t = 1'b1;
++`endif
++
++  int cyc = 0;
++  always @(posedge clk) begin
++    cyc <= cyc + 1;
++    if (cyc == 2) begin
++      if (fired_w !== 1'b1) $stop;
++      if (fired_w2 !== 1'b1) $stop;
++      if (fired_w3 !== 1'b1) $stop;
++      if (fired_wc !== 1'b1) $stop;
++      if (fired_v2 !== 1'b1) $stop;
++      if (fired_v !== 1'b0) $stop;
++      if (fired_u !== 1'b0) $stop;
++      if (pad0 !== 1'b1 || pad1 !== 1'b1) $stop;
++      if (fired_t !== 1'b1) $stop;
++      // Later changes still fire
++      fired_w <= 1'b0;
++      pad0 <= 1'b0;
++    end
++    if (cyc == 3) a <= 1'b1;  // w: 0 -> 1, rd_eop: 0 -> 1
++    if (cyc == 5) begin
++      if (fired_w !== 1'b1) $stop;
++      if (pad0 !== 1'b0) $stop;
++      $write("*-* All Finished *-*\n");
++      $finish;
++    end
++  end
++
++endmodule
++
++module sub (
++    input wire i,
++    output wire o
++);
++  assign o = ~i;
++endmodule
+diff --git a/test_regress/t/t_sched_sense_net_init_timing.py b/test_regress/t/t_sched_sense_net_init_timing.py
+new file mode 100755
+index 000000000..4d0763e28
+--- /dev/null
++++ b/test_regress/t/t_sched_sense_net_init_timing.py
+@@ -0,0 +1,20 @@
++#!/usr/bin/env python3
++# DESCRIPTION: Verilator: Verilog Test driver/expected results
++#
++# Copyright 2026 by Wilson Snyder. This program is free software; you
++# can redistribute it and/or modify it under the terms of either the GNU
++# Lesser General Public License Version 3 or the Perl Artistic License
++# Version 2.0.
++# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
++
++import vltest_bootstrap
++
++test.scenarios('simulator')
++
++test.top_filename = "t/t_sched_sense_net_init.v"
++
++test.compile(verilator_flags2=["--binary", "--timing", "+define+WITH_TIMING"])
++
++test.execute()
++
++test.passes()

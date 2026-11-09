@@ -4,6 +4,10 @@
   (`nvcx::Core`, `include/nvcx/core.hpp`); xsim (`src/xsim/`) is one
   backend, chosen by what a snapshot directory holds. No change in
   behaviour.
+- Releases carry a Verilator package (5.054+git202611072109.74cf7aa-1+nvcx2,
+  from `contrib/verilator`: Debian's packaging, an upstream snapshot, and
+  the patches nvcx needs), for the Verilator backend to come. nvcx's
+  package depends on it, and the Docker image installs it.
 
 ## Version 0.2.0 - 2026-10-26
 

@@ -1,0 +1,22 @@
+From: =?utf-8?b?Itij2K3ZhdivINin2YTZhdit2YXZiNiv2YogKEFobWVkIEVsLU1haG1v?=
+ =?utf-8?b?dWR5KSI=?= <aelmahmoudy@users.sourceforge.net>
+Date: Fri, 6 Jan 2023 16:57:08 +0100
+Subject: Remove 'libdir' field from pkgconfig file
+
+lintian complains that this field had a multi-arch value, while the pkgconfig
+file is installed in usr/share/pkgconfig/
+---
+ verilator.pc.in | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/verilator.pc.in b/verilator.pc.in
+index ed8b58d..2eaafb1 100644
+--- a/verilator.pc.in
++++ b/verilator.pc.in
+@@ -1,6 +1,5 @@
+ prefix=@prefix@
+ exec_prefix=@exec_prefix@
+-libdir=@libdir@
+ datarootdir=@datarootdir@
+ includedir=@pkgdatadir@/include
+ 

@@ -1,3 +1,4 @@
-# the image build needs only the NVC patches
+# the image build needs only contrib/: the NVC patches, and Verilator's
+# packaging
 *
 !contrib/

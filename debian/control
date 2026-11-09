@@ -10,7 +10,8 @@ Homepage: https://github.com/gsmecher/nvcx
 
 Package: nvcx
 Architecture: amd64
-Depends: ${shlibs:Depends}, ${misc:Depends}, nvc (>= 1.23.0-1+nvcx1), tcllib
+Depends: ${shlibs:Depends}, ${misc:Depends}, nvc (>= 1.23.0-1+nvcx1),
+ verilator (>= 5.054+git202611072109.74cf7aa-1+nvcx2), tcllib
 Description: AMD/Xilinx xsim cores inside the NVC VHDL simulator
  nvcx embeds AMD/Xilinx's xsim simulator inside NVC, so that encrypted IP,
  XPM macros and SystemVerilog with generics can be simulated within an

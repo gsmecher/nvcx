@@ -1,0 +1,91 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+#export DH_VERBOSE = 1
+
+# Switch on the hardening
+export DEB_BUILD_MAINT_OPTIONS += hardening=+all
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/architecture.mk
+include /usr/share/dpkg/buildflags.mk
+include /usr/share/dpkg/pkg-info.mk
+
+ifneq (,$(filter $(DEB_HOST_ARCH), mipsel))
+  export DEB_CPPFLAGS_MAINT_APPEND += -g1
+endif
+
+CLEAN_OUT_DATA := \
+config.log \
+configure \
+docs/_build \
+src/config_rev.h \
+verilator-config.cmake \
+verilator-config-version.cmake \
+verilator.pc \
+$(NULL)
+
+%:
+	dh $@
+
+# We don't build on top of a working git tree, so src/config_rev can't find
+# a git revision: name the build after the package instead.
+export VERILATOR_SRC_VERSION = v$(DEB_VERSION_UPSTREAM) ($(DEB_VERSION))
+
+override_dh_clean:
+	dh_clean
+	rm -rf $(CLEAN_OUT_DATA)
+
+override_dh_autoreconf:
+	autoconf
+
+override_dh_auto_build:
+	dh_auto_build
+ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
+	##########################################
+	# Build sphinx based HTML documentation. #
+	##########################################
+	cd docs && make html
+	#########################################
+	# Build sphinx based PDF documentation. #
+	#########################################
+	cd docs && make pdf
+endif
+
+override_dh_compress:
+	dh_compress --exclude=examples --exclude=verilator.pdf
+
+override_dh_fixperms:
+	dh_fixperms
+	# Fixing file permissions for Python based files in /usr/share/verilator/examples.
+	for file in `find $(CURDIR)/debian/verilator/usr/share/verilator/examples -type f`; do \
+		FOUND_PYTHON=$$(head -n1 $$file | grep python); \
+		if [ "$$FOUND_PYTHON" != "" ]; then \
+			chmod +x $$file; \
+		else \
+			chmod -x $$file; \
+		fi; \
+	done
+
+# From d/patches/const-net-change-sensitivity.patch
+NVCX_TESTS := t_sched_sense_const t_sched_sense_net_init t_sched_sense_net_init_timing \
+	t_unpacked_wide_reverse_copy t_unpacked_wide_reverse_copy_noslice \
+	t_force_release_unpacked_whole t_force_release_unpacked_whole_noslice \
+	t_force_release_unpacked_whole_limit t_force_unpacked_whole_unsup
+
+# armel, mips{,64}el will break due libatomic issues, can be ignored for dh_auto_test.
+override_dh_auto_test:
+ifeq (,$(filter armel mipsel mips64el,$(DEB_BUILD_ARCH)))
+	dh_auto_test
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# The regression tests our patches add (see d/patches)
+	cd test_regress && for t in $(NVCX_TESTS); do \
+		VERILATOR_ROOT=$(CURDIR) ./t/$$t.py || exit 1; done
+endif
+else
+	@echo "#########################################"
+	@echo "# Skipping calling dh_auto_test on $(DEB_BUILD_ARCH)"
+	@echo "#########################################"
+endif
+
+# Ignore dwz, it's failing and does gain nothing.
+override_dh_dwz:

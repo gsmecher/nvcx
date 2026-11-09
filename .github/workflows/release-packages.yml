@@ -7,6 +7,10 @@ name: Build release packages
 # next, which replaces it in an ordinary upgrade. Bump the +nvcxN suffix when
 # the patches change. Tags attach all of them to their GitHub release.
 #
+# Verilator too: Ubuntu 24.04 and Debian 13 ship releases too old for nvcx,
+# so contrib/verilator packages a recent one (contrib/verilator/build-deb.sh,
+# which takes the version from its debian/changelog).
+#
 # The releases are those NVC packages for, less Debian 12 and Ubuntu 22.04,
 # which lack C++20's <format> (GCC 13), and Ubuntu 22.04 also CMake 3.24.
 
@@ -67,6 +71,8 @@ jobs:
           deb=nvc_${NVC_DEB_VERSION#*:}_amd64.deb
           apt-get -y install ../$deb
           mv ../$deb ../nvc_${NVC_DEB_VERSION}_$SUFFIX.deb
+      - name: Build Verilator package
+        run: nvcx/contrib/verilator/build-deb.sh . $SUFFIX
       - name: Build nvcx package
         working-directory: nvcx
         run: |

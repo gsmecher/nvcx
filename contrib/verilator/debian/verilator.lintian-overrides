@@ -1,0 +1,10 @@
+# This is intended, the examples need the CMakeLists.txt files.
+verilator: package-contains-documentation-outside-usr-share-doc [usr/share/verilator/examples/cmake_hello_c/CMakeLists.txt]
+verilator: package-contains-documentation-outside-usr-share-doc [usr/share/verilator/examples/cmake_hello_sc/CMakeLists.txt]
+verilator: package-contains-documentation-outside-usr-share-doc [usr/share/verilator/examples/cmake_protect_lib/CMakeLists.txt]
+verilator: package-contains-documentation-outside-usr-share-doc [usr/share/verilator/examples/cmake_tracing_c/CMakeLists.txt]
+verilator: package-contains-documentation-outside-usr-share-doc [usr/share/verilator/examples/cmake_tracing_sc/CMakeLists.txt]
+
+# Upstream says that is o.k. by pointing to dictionary.com.
+verilator: spelling-error-in-binary Savable Saveable [usr/bin/verilator_bin]
+verilator: spelling-error-in-binary Savable Saveable [usr/bin/verilator_bin_dbg]
