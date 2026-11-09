@@ -5,6 +5,12 @@ import pytest
 
 from test_nvc import Case, Core, run_case
 
+
+def core_finished(r, core):
+    out = r.stdout + r.stderr
+    assert f"nvcx: {core}: the core finished its simulation" in out, out
+
+
 REGRESSIONS = {
     # nvcx.tcl passed string generics to xelab as -generic_top NAME=VALUE, unquoted, so xelab took
     # a numeric-looking one ("0") as a number. XPM's READ_RESET_VALUE_A => "0" arrived as the
@@ -33,6 +39,37 @@ REGRESSIONS = {
         "tb_kwports",
         "10ns",
         sources=["kwports_comp.vhd"],
+    ),
+    # A core's $stop went unreported, and the run passed. The kernel notes it in its status, but
+    # then resumes the run, which overwrites the status at its end; the core silently stopped
+    # running. It is an error now, as Verilator reports it, and the core finishes.
+    "stop": Case(
+        [Core("stop", "stop_v")],
+        "tb_stop.vhd",
+        "tb_stop",
+        "100ns",
+        expect_failure=[
+            "** Error: 25ns+1: :tb_stop:s:core:: $stop called",
+            "the core finished its simulation",
+            "PASS",
+        ],
+    ),
+    # Likewise std.env.stop in a VHDL core: its status is not the kernel's to see, so it ends the
+    # core's simulation as std.env.finish and $finish do, with a note, not silently.
+    "stop_vhdl": Case(
+        [Core("stop", "stop")],
+        "tb_stop.vhd",
+        "tb_stop",
+        "100ns",
+        check=lambda tmp_path, r: core_finished(r, ":tb_stop:s:core:"),
+    ),
+    # ...and std.env.finish, whose status the kernel overwrites in the same way
+    "finish_vhdl": Case(
+        [Core("stop", "finish")],
+        "tb_stop.vhd",
+        "tb_stop",
+        "100ns",
+        check=lambda tmp_path, r: core_finished(r, ":tb_stop:s:core:"),
     ),
 }
 

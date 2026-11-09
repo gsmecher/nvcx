@@ -26,8 +26,9 @@ struct nvcx_vlt_model {
     nvcx_vlt_sink sink;
     std::unique_ptr<VerilatedContext> context;
     std::unique_ptr<Vcore> top;
-    std::string line;       // printed text not yet ended by a newline
-    bool evaluated = false; // (so final blocks run only after initial ones)
+    std::string line;           // printed text not yet ended by a newline
+    bool error_printed = false; // the last line printed was an %Error report
+    bool evaluated = false;     // (so final blocks run only after initial ones)
 };
 
 namespace {
@@ -38,8 +39,22 @@ struct Fatal {};
 // The model being run on this thread, whose sink gets what it prints
 thread_local nvcx_vlt_model* t_current = nullptr;
 
+// "[T] %Error: ..." or "%Error-CODE: ...", as $error and a failed assertion
+// print before they stop (maybe)
+bool is_error_report(const std::string& line) {
+    size_t pos = 0;
+    if (!line.empty() && line[0] == '[') {
+        pos = line.find("] ");
+        if (pos == std::string::npos)
+            return false;
+        pos += 2;
+    }
+    return line.compare(pos, 6, "%Error") == 0;
+}
+
 void flush_line(nvcx_vlt_model& m) {
     if (!m.line.empty()) {
+        m.error_printed = is_error_report(m.line);
         std::string line;
         line.swap(m.line);
         m.sink.print(m.sink.user, line.c_str());
@@ -258,16 +273,24 @@ int nvcx_vl_printf(const char* format, ...) {
     return n;
 }
 
-// $error and failed assertions (maybe) only count: what they mean for the
+// $error and failed assertions only count: what they mean for the
 // simulation is NVC's call (--exit-severity), as for any other assertion.
-// $stop and $fatal (not maybe) stop, as Verilator's would: with fatalOnError
-// off, its vl_stop finishes the model and returns.
+// $stop and $fatal stop, as Verilator's would: with fatalOnError off, its
+// vl_stop reports "%Error: ...: Verilog $stop", finishes the model and
+// returns. $fatal comes here not maybe, but $stop maybe, as $error and a
+// failed assertion do (all three are counted towards Verilator's
+// +verilator+error+limit); what tells them apart is that $error and the
+// assertion have just printed their %Error report, and $stop nothing.
 void vl_stop_maybe(const char* filename,
                    int linenum,
                    const char* hier,
                    bool maybe) VL_MT_UNSAFE {
+    nvcx_vlt_model* m = t_current;
+    const bool reported = m && m->error_printed && m->line.empty();
+    if (m)
+        m->error_printed = false; // (a $stop after $error stops)
     Verilated::threadContextp()->errorCountInc();
-    if (!maybe)
+    if (!maybe || !reported)
         vl_stop(filename, linenum, hier);
 }
 

@@ -51,6 +51,9 @@ DESIGNS = {
     "strgen": ("vhdl", "strgen.vhd", "strgen"),
     "strgen_v": ("sv", "strgen.v", "strgen"),
     "kwports_v": ("sv", "kwports.v", "kwports"),
+    "stop": ("vhdl", "stop.vhd", "stop"),
+    "stop_v": ("sv", "stop.v", "stop"),
+    "finish": ("vhdl", "finish.vhd", "stop"),
     # Verilator's delta-cycle concessions (tests/test_verilator.py)
     "regcomb_v": ("sv", "regcomb.v", "regcomb"),
     "clkgen_v": ("sv", "clkgen.v", "clkgen"),

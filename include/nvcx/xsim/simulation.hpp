@@ -50,6 +50,12 @@ class Simulation final : public Core {
     void emit_report(const std::string& raw);
     RunResult after_run();
     static void on_active_events(void* eventq);
+    // The design's calls to the kernel's $stop, std.env.stop and finish
+    // (k_stops in simulation.cpp, entry I), noted in stop_ on the way
+    template <int I>
+    static void
+    on_stop(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+    int stop_ = -1; // the entry of k_stops the design called, if any
     // The kernel runs on a fiber of its own (one per Simulation, kept for
     // its lifetime); main_ is the caller's side while the kernel runs.
     boost::context::fiber run_, main_;

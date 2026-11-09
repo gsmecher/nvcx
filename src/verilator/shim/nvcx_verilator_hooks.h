@@ -7,7 +7,8 @@
 //
 // The shim also replaces two of the runtime's functions (VL_USER_*), the
 // minimum for a model to share a process: vl_fatal, which Verilator's would
-// end with exit(), and vl_stop_maybe, so that $error only counts. The rest
+// end with exit(), and vl_stop_maybe, so that $error only counts (and $stop,
+// which Verilator calls it for too, still stops). The rest
 // keep Verilator's own behaviour, with fatalOnError off: $stop and $fatal
 // finish the model rather than the process.
 

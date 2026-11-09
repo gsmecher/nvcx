@@ -125,14 +125,14 @@ bool Kernel::next_event_time(uint64_t& t) const {
     return true;
 }
 
-void Kernel::hook_active_events(void (*hook)(void*)) {
-    // The slot is the R_X86_64_JUMP_SLOT relocation for the symbol, found in
-    // the loaded copy's dynamic section (the loader has already rebased the
-    // table addresses).
-    const char* const sym = "_ZN5ISIMK6EventQ19processActiveEventsEv";
+// Point *handle*'s PLT slot for *sym* (its R_X86_64_JUMP_SLOT relocation,
+// found in the loaded copy's dynamic section, whose table addresses the
+// loader has already rebased) at *hook*. False if it has none: the library
+// never calls *sym*.
+bool hook_plt(void* handle, const char* sym, void* hook) {
     link_map* lm = nullptr;
-    if (dlinfo(handle_, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
-        throw std::runtime_error("cannot read the kernel's link map");
+    if (dlinfo(handle, RTLD_DI_LINKMAP, &lm) != 0 || !lm)
+        throw std::runtime_error("cannot read a link map");
     const ElfW(Rela)* rela = nullptr;
     size_t rela_size = 0;
     const ElfW(Sym)* symtab = nullptr;
@@ -154,7 +154,8 @@ void Kernel::hook_active_events(void (*hook)(void*)) {
         }
     }
     if (!rela || !symtab || !strtab)
-        throw std::runtime_error("the kernel has no PLT relocations");
+        throw std::runtime_error(
+            std::format("{} has no PLT relocations", lm->l_name));
     for (size_t i = 0; i < rela_size / sizeof(ElfW(Rela)); i++) {
         if (ELF64_R_TYPE(rela[i].r_info) != R_X86_64_JUMP_SLOT)
             continue;
@@ -162,11 +163,21 @@ void Kernel::hook_active_events(void (*hook)(void*)) {
         if (std::strcmp(strtab + s.st_name, sym) != 0)
             continue;
         auto* slot = reinterpret_cast<void**>(lm->l_addr + rela[i].r_offset);
-        *slot = reinterpret_cast<void*>(hook);
-        return;
+        *slot = hook;
+        return true;
     }
-    throw std::runtime_error(
-        std::format("the kernel does not call {} through its PLT", sym));
+    return false;
+}
+
+void Kernel::hook_active_events(void (*hook)(void*)) {
+    const char* const sym = "_ZN5ISIMK6EventQ19processActiveEventsEv";
+    if (!hook_plt(handle_, sym, reinterpret_cast<void*>(hook)))
+        throw std::runtime_error(
+            std::format("the kernel does not call {} through its PLT", sym));
+}
+
+void* Kernel::symbol(const char* sym) const {
+    return dlsym(handle_, sym);
 }
 
 void Kernel::discover_offsets() {

@@ -381,6 +381,20 @@ Reports and assertions from a core become NVC assertions of the same
 severity, prefixed with the shell's instance name, so
 .Nm nvc Fl Fl exit-severity
 governs them as it does any other.
+.Pp
+A core that ends its own simulation
+.Po
+.Li $finish ,
+.Li std.env.finish
+or
+.Li std.env.stop
+.Pc
+ends only its own: NVC notes that the core finished, its outputs keep their
+last values, and the simulation carries on.
+.Li $stop
+does the same, and is reported as an NVC assertion of severity error.
+.Li $fatal
+is an assertion of severity failure.
 .\" ------------------------------------------------------------
 .\" Environment
 .\" ------------------------------------------------------------

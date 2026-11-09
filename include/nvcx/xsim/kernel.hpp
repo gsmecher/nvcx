@@ -33,6 +33,10 @@ enum : int {
     xsiFatalError = 3,
 };
 
+// Point the PLT slot for *sym* in the library dlopen()ed as *handle* at
+// *hook*; false if the library has no such slot (it never calls *sym*).
+bool hook_plt(void* handle, const char* sym, void* hook);
+
 class Kernel {
   public:
     // Vivado's kernel ($XILINX_VIVADO), loaded on first use: one per
@@ -77,6 +81,9 @@ class Kernel {
     // hook must call process_active_events itself.
     void (*process_active_events)(void*) = nullptr;
     void hook_active_events(void (*hook)(void*));
+
+    // The kernel's own definition of *sym*, or null
+    void* symbol(const char* sym) const;
 
     // The kernel's release, "2026.1", from ISIM::VersionUtils::populateVersion
     // (2025.2 and later, else "".)

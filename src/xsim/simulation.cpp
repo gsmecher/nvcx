@@ -72,7 +72,44 @@ namespace {
             sim->close();
     }
 
+    // How a design ends its simulation other than by $finish, whose status
+    // (KS_FINISHED) after_run sees. These set a status too, but then return
+    // into XSIHost::run, which carries on to the end of the run, where it is
+    // overwritten (by "stopped", as at the end of every run): so the design's
+    // calls to them are hooked, to note them first.
+    struct StopEntry {
+        const char* sym;
+        Core::Severity severity; // of the report it becomes
+        const char* text;
+    };
+    const StopEntry k_stops[] = {
+        // Verilog's $stop (xsim's own batch mode reports it and exits 0)
+        {"iki_vlog_stop", Core::Severity::Error, "$stop called"},
+        // VHDL's std.env.stop and finish: ends of the simulation like
+        // $finish (their status argument does not reach the kernel)
+        {"iki_vhdl_stop", Core::Severity::Note, nullptr},
+        {"iki_vhdl_finish", Core::Severity::Note, nullptr},
+    };
+    constexpr int N_STOPS = sizeof k_stops / sizeof k_stops[0];
+    using StopFn = void (*)(
+        uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+    StopFn g_stop_original[N_STOPS];
+
 } // namespace
+
+// (the integer argument registers, passed through: the kernel's entry
+// points take pointers and integers only)
+template <int I>
+void Simulation::on_stop(uintptr_t a,
+                         uintptr_t b,
+                         uintptr_t c,
+                         uintptr_t d,
+                         uintptr_t e,
+                         uintptr_t f) {
+    if (Simulation* s = t_current; s && s->stop_ < 0)
+        s->stop_ = I;
+    g_stop_original[I](a, b, c, d, e, f);
+}
 
 Simulation::Simulation(const std::string& design_so)
     : design_dir_(dirname_of(design_so)) {
@@ -120,6 +157,17 @@ Simulation::Simulation(const std::string& design_so)
         if (!design_handle_)
             throw std::runtime_error(
                 std::format("cannot load design {}: {}", design_so, dlerror()));
+        static void* const hooks[N_STOPS] = {
+            reinterpret_cast<void*>(&Simulation::on_stop<0>),
+            reinterpret_cast<void*>(&Simulation::on_stop<1>),
+            reinterpret_cast<void*>(&Simulation::on_stop<2>),
+        };
+        for (int i = 0; i < N_STOPS; i++) {
+            g_stop_original[i] =
+                reinterpret_cast<StopFn>(kernel_->symbol(k_stops[i].sym));
+            if (g_stop_original[i])
+                hook_plt(design_handle_, k_stops[i].sym, hooks[i]);
+        }
         auto xsi_open = reinterpret_cast<XsiHandle (*)(XsiSetupInfo*)>(
             dlsym(design_handle_, "xsi_open"));
         if (!xsi_open)
@@ -341,6 +389,14 @@ Simulation::RunResult Simulation::after_run() {
     if (!err.empty())
         emit_report(
             err); // a report; what it means for the run is the sink's call
+    if (stop_ >= 0) {
+        finished_ = true;
+        if (k_stops[stop_].text)
+            report(k_stops[stop_].severity,
+                   k_stops[stop_].text,
+                   k_stops[stop_].text);
+        return {RunStatus::Finished, "simulation finished"};
+    }
     int ks = kernel_->status_kind();
     if (ks == abi::KS_FINISHED || ks == abi::KS_VHDL_FINISH ||
         ks == abi::KS_CLOSED) {

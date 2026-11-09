@@ -131,6 +131,20 @@ CASES = {
         expect_absent=["FAIL"],
         expect_once=["DOOM!"],
     ),
+    # $stop is an error that finishes the model, as Verilator reports it standalone. Verilator
+    # calls the runtime for $stop as it does for $error, which only counts: the shim once let
+    # $stop only count too, silently, and the run passed.
+    "stop": Case(
+        [vl("stop", "stop_v")],
+        "tb_stop.vhd",
+        "tb_stop",
+        "100ns",
+        expect_failure=[
+            "** Error: 25ns+1: :tb_stop:s:core:: Verilog $stop",
+            "the core finished its simulation",
+            "PASS",
+        ],
+    ),
     # Concession 1: a time slot settles at once, so a combinational output derived from a
     # registered one changes in the same NVC delta as it, not one later (xsim passes this
     # testbench: tests/test_delta.py)
