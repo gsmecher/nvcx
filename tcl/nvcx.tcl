@@ -40,6 +40,17 @@ namespace eval nvcx {
         return unknown
     }
 
+    # Rename directory TMP to DIR, which must not exist (or be empty): false,
+    # with TMP deleted, if it does. rename(2), through mv -T: Tcl's file
+    # rename would move TMP into an existing DIR instead of failing.
+    proc publish {tmp dir} {
+        if {[catch {exec mv -T -- $tmp $dir}]} {
+            file delete -force $tmp
+            return 0
+        }
+        return 1
+    }
+
     # The snapshot of LIBRARY.ENTITY elaborated with ELAB (xelab arguments)
     # and the generics TOPS (a list of -generic_top values): its
     # directory xsim.dir/ENTITY in the cache, running xelab on a miss. A
@@ -74,9 +85,8 @@ namespace eval nvcx {
         if {![file exists [file join $tmp xsim.dir $entity xsimk.so]]} {
             error "xelab wrote no snapshot for $snapshot; see $log"
         }
-        if {[catch {file rename $tmp $dir}]} {
-            file delete -force $tmp
-            if {![file exists $so]} { error "cannot publish $dir" }
+        if {![publish $tmp $dir] && ![file exists $so]} {
+            error "cannot publish $dir"
         }
         return [file normalize [file dirname $so]]
     }
@@ -96,8 +106,18 @@ namespace eval nvcx {
     # top-level port of the model Vcore.h declares (VL_IN8(&clk,0,0); ...)
     proc verilator_ports {header out} {
         set ports {}
+        # Vcore.h lists the ports, and nothing else, under "// PORTS", up to a
+        # blank line. One this cannot describe (an unpacked array or a real,
+        # which are references there, not VL_IN and friends) must not go
+        # missing quietly: the bridge would leave the shell's port undriven.
+        set section 0
         foreach line [split [::fileutil::cat $header] "\n"] {
+            if {[regexp {^\s*// PORTS\s*$} $line]} { set section 1; continue }
+            if {[string trim $line] eq ""} { set section 0 }
             if {![regexp {^\s*VL_(IN|OUT|INOUT)(\w*)\(&(\w+),\s*(-?\d+),\s*(-?\d+)} $line -> dir type member msb lsb]} {
+                if {$section && ![regexp {^\s*//} $line]} {
+                    error "port [string trim $line]: only integral ports are supported (not unpacked arrays or reals)"
+                }
                 continue
             }
             if {$type ni {"" 8 16 64 W}} {
@@ -207,14 +227,14 @@ namespace eval nvcx {
         file rename [file join $obj verilator.so] [file join $tmp verilator.so]
         set paths [verilator_sources $obj]
         ::fileutil::writeFile [file join $tmp sources.txt] [list $paths [verilator_digest $paths]]
-        if {[file exists $dir]} {
+        if {[file exists $dir] && ![verilator_fresh $dir]} {
             # stale: its sources changed. Set aside rather than deleted, in
             # case a simulation has it open
-            catch { file rename $dir "$dir.stale.[file tail $tmp]" }
+            catch { exec mv -T -- $dir "$dir.stale.[file tail $tmp]" }
         }
-        if {[catch {file rename $tmp $dir}]} {
-            file delete -force $tmp
-            if {![file exists $so]} { error "cannot publish $dir" }
+        # (lost to a concurrent script: its model must be of these sources)
+        if {![publish $tmp $dir] && !([file exists $so] && [verilator_fresh $dir])} {
+            error "cannot publish $dir"
         }
         return [file normalize $dir]
     }
