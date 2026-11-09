@@ -10,6 +10,7 @@
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -267,21 +268,39 @@ void Simulation::emit_report(const std::string& raw) {
         report(report_severity(m), report_text(m), m);
 }
 
+namespace {
+
+    // The kernel's severity prefixes. A message without one ($display's
+    // text) is a note, and all of it is text: a colon of its own is not a
+    // prefix's.
+    const struct {
+        std::string_view prefix;
+        Core::Severity severity;
+    } SEVERITIES[] = {
+        {"Failure:", Core::Severity::Failure},
+        {"Fatal:", Core::Severity::Failure},
+        {"Error:", Core::Severity::Error},
+        {"Warning:", Core::Severity::Warning},
+        {"Note:", Core::Severity::Note},
+        {"Info:", Core::Severity::Note},
+    };
+
+} // namespace
+
 Core::Severity Simulation::report_severity(const std::string& msg) {
-    if (msg.starts_with("Failure:") || msg.starts_with("Fatal:"))
-        return Severity::Failure;
-    if (msg.starts_with("Error:"))
-        return Severity::Error;
-    if (msg.starts_with("Warning:"))
-        return Severity::Warning;
+    for (const auto& s : SEVERITIES)
+        if (msg.starts_with(s.prefix))
+            return s.severity;
     return Severity::Note;
 }
 
 std::string Simulation::report_text(const std::string& msg) {
-    size_t colon = msg.find(':');
-    std::string text = colon == std::string::npos ? msg : msg.substr(colon + 1);
-    size_t start = text.find_first_not_of(' ');
-    return start == std::string::npos ? "" : text.substr(start);
+    for (const auto& s : SEVERITIES)
+        if (msg.starts_with(s.prefix)) {
+            size_t start = msg.find_first_not_of(' ', s.prefix.size());
+            return start == std::string::npos ? "" : msg.substr(start);
+        }
+    return msg;
 }
 
 // The hook on the kernel's signal-update phase: do the updates, then, in a
