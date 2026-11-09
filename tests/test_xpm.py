@@ -338,6 +338,10 @@ class Port:
     width: int
 
 
+# The xsim library the macros and their wrappers are compiled into (see prepare)
+XSIM_LIBRARY = "nvcx_xpm"
+
+
 def point_id(macro, i):
     return f"{macro}_{i}"
 
@@ -692,9 +696,12 @@ def xpm_prepared(nvc, build, vivado, verilator, xpm_work, tmp_path_factory):
         (d / f"{vl}.sv").write_text(wrapper(vl, macro, params, ports))
         (d / f"{top}.vhd").write_text(tb_text(top, xs, vl, macro, pid, ports))
         prj = d / "xs.prj"
+        # Into a library of the test's own, which xelab keeps in the snapshot's directory. Not
+        # "xpm": Vivado's xsim.ini maps that to the precompiled library in its installation,
+        # which xelab would compile these sources into, when it can write there at all.
         prj.write_text(
-            "".join(f"sv xpm {s}\n" for s in sources)
-            + f"verilog xpm {glbl(vivado)}\nsv xpm {d / f'{xs}.sv'}\n"
+            "".join(f"sv {XSIM_LIBRARY} {s}\n" for s in sources)
+            + f"verilog {XSIM_LIBRARY} {glbl(vivado)}\nsv {XSIM_LIBRARY} {d / f'{xs}.sv'}\n"
         )
         vargs = " ".join(
             [*map(str, [d / f"{vl}.sv", *sources, glbl(vivado)]), *VERILATOR_ARGS]
@@ -702,7 +709,7 @@ def xpm_prepared(nvc, build, vivado, verilator, xpm_work, tmp_path_factory):
         (d / "nvc.tcl").write_text(
             "package require nvcx\n"
             f"nvcx::write_shell -component {xs} -output {d / xs}_shell.vhd"
-            f" -library xpm -elab {{-prj {prj}}}\n"
+            f" -library {XSIM_LIBRARY} -elab {{-prj {prj}}}\n"
             f"nvcx::write_shell -component {vl} -output {d / vl}_shell.vhd -verilator {{{vargs}}}\n"
         )
         env = dict(
