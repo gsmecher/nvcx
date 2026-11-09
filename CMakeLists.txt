@@ -28,9 +28,15 @@ find_package(Boost CONFIG REQUIRED COMPONENTS context)
 add_library(nvcx_xsim STATIC src/xsim/kernel.cpp src/xsim/vivado.cpp src/xsim/simulation.cpp)
 target_link_libraries(nvcx_xsim PUBLIC nvcx_core ${CMAKE_DL_LIBS} Boost::context PRIVATE nvcx_warnings)
 
+# Verilator backend: loads the models nvcx.tcl builds with the harness in
+# src/verilator/shim, which ships with the Tcl package (NVCX_VERILATOR_SHIM)
+add_library(nvcx_verilator STATIC src/verilator/model.cpp)
+target_include_directories(nvcx_verilator PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/verilator/shim)
+target_link_libraries(nvcx_verilator PUBLIC nvcx_core ${CMAKE_DL_LIBS} PRIVATE nvcx_warnings)
+
 # open_core: every backend, chosen by what a snapshot holds
 add_library(nvcx_backends STATIC src/core/open.cpp)
-target_link_libraries(nvcx_backends PUBLIC nvcx_xsim PRIVATE nvcx_warnings)
+target_link_libraries(nvcx_backends PUBLIC nvcx_xsim nvcx_verilator PRIVATE nvcx_warnings)
 
 # VHPI plugin for NVC, built against the vhpi_user.h NVC installs, as its
 # pkg-config file says (nvc.pc: NVC 1.24, or contrib/0005 for 1.23)
@@ -70,8 +76,11 @@ add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/nvcx.vhd
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/vhdl/nvcx.vhd)
 add_custom_target(nvcx_vhd ALL DEPENDS ${CMAKE_BINARY_DIR}/nvcx.vhd)
 
-# Tcl scripts for `nvc --do`, beside the build tree's executable
+# Tcl scripts for `nvc --do`, beside the build tree's executable, and the
+# harness nvcx::verilate compiles with each verilated model
 file(GLOB NVCX_TCL CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tcl/*.tcl)
+file(GLOB NVCX_VERILATOR_SHIM CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/verilator/shim/*)
+list(APPEND NVCX_TCL ${NVCX_VERILATOR_SHIM})
 configure_file(tcl/pkgIndex.tcl.in ${CMAKE_BINARY_DIR}/generated/pkgIndex.tcl @ONLY)
 list(APPEND NVCX_TCL ${CMAKE_BINARY_DIR}/generated/pkgIndex.tcl)
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/tcl.stamp

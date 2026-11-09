@@ -1,15 +1,16 @@
 # nvcx: NVC's side of the Tcl flow.
 #
 # At this point in the flow, NVC has parsed and elaborated the overall design
-# enough that we can walk it and identify cores needing to connect to XSI.
-# When we find these cores,
-# 
-# - emit a VHDL shell containing a bridge component for NVC
-# - run xelab on the underlying component for XSI
+# enough that we can walk it and identify cores needing to connect to another
+# simulator. When we find these cores,
 #
-# ...which allows the gap between NVC and xsim to be closed. After that,
-# the generated VHDL shells need to be elaborated by NVC and the simulator
-# can start.
+# - emit a VHDL shell containing a bridge component for NVC
+# - build the underlying component's model: an xsim snapshot (xelab), or a
+#   verilated model (verilator)
+#
+# ...which allows the gap between NVC and the other simulator to be closed.
+# After that, the generated VHDL shells need to be elaborated by NVC and the
+# simulator can start.
 
 package require sha256
 package require fileutil
@@ -18,6 +19,9 @@ package require cmdline
 namespace eval nvcx {
     # Component instances, collected on first use
     variable found {}
+
+    # This package's directory, which holds the Verilator shim's sources too
+    variable here [file dirname [file normalize [info script]]]
 
     # Snapshot cache
     proc workdir {} {
@@ -75,6 +79,144 @@ namespace eval nvcx {
             if {![file exists $so]} { error "cannot publish $dir" }
         }
         return [file normalize [file dirname $so]]
+    }
+
+    # "Verilator 5.054 2026-11-01 rev ..." from the verilator on PATH
+    proc verilator_version {} {
+        variable verilator_version
+        if {![info exists verilator_version]} {
+            if {[catch {exec verilator --version} verilator_version]} {
+                error "cannot run verilator: $verilator_version"
+            }
+        }
+        return $verilator_version
+    }
+
+    # nvcx_ports.h, for the shim: an NVCX_PORT(name, dir, width, member) per
+    # top-level port of the model Vcore.h declares (VL_IN8(&clk,0,0); ...)
+    proc verilator_ports {header out} {
+        set ports {}
+        foreach line [split [::fileutil::cat $header] "\n"] {
+            if {![regexp {^\s*VL_(IN|OUT|INOUT)(\w*)\(&(\w+),\s*(-?\d+),\s*(-?\d+)} $line -> dir type member msb lsb]} {
+                continue
+            }
+            if {$type ni {"" 8 16 64 W}} {
+                error "port $member: Verilator type VL_$dir$type is not supported (only integral ports are)"
+            }
+            # Verilator spells a character a C++ identifier cannot hold as
+            # __0HH; the Verilog name has the character itself
+            set name [subst -nocommands -novariables [regsub -all {__0([0-9a-fA-F]{2})} $member {\\x\1}]]
+            set width [expr {abs($msb - $lsb) + 1}]
+            lappend ports "NVCX_PORT(\"[string map {\\ \\\\ \" \\\"} $name]\", NVCX_VLT_$dir, $width, $member)"
+        }
+        ::fileutil::writeFile $out "[join $ports \n]\n"
+    }
+
+    # nvcx_threads.h, for the shim: the threads the model Vcore.cpp defines
+    # was verilated for (--threads; 1 without), which its VerilatedContext
+    # must have before the model is constructed
+    proc verilator_threads {source out} {
+        if {![regexp {unsigned Vcore::threads\(\) const \{ return (\d+); \}} [::fileutil::cat $source] -> n]} {
+            error "cannot find the model's thread count in $source"
+        }
+        ::fileutil::writeFile $out "#define NVCX_VLT_THREADS $n\n"
+    }
+
+    # A digest of nvcx's harness, which every model is built with: a model
+    # built with another harness is stale
+    proc verilator_harness {} {
+        variable here
+        set digests {}
+        foreach f [lsort [glob -directory $here nvcx_verilator_*]] {
+            lappend digests [::sha2::sha256 -hex -filename $f]
+        }
+        return [::sha2::sha256 -hex -- [join $digests]]
+    }
+
+    # The sources a model in *dir* was verilated from, with their contents'
+    # digests: what Verilator read (its Vcore__verFiles.dat), so -y
+    # libraries, `include files and -f files too. Throws if one is missing.
+    proc verilator_digest {paths} {
+        if {![llength $paths]} { return "" }
+        return [exec sha256sum -- {*}$paths]
+    }
+    proc verilator_sources {obj} {
+        set paths {}
+        foreach line [split [::fileutil::cat [file join $obj Vcore__verFiles.dat]] "\n"] {
+            # S <size> <ino> <ctime> <ns> <mtime> <ns> "<hash>" "<path>"
+            if {[regexp {^S\s.*"([^"]*)"\s+"(.*)"$} $line -> hash path] && $hash ne "unhashed"} {
+                lappend paths $path
+            }
+        }
+        return $paths
+    }
+    # Whether the model in *dir* is still that of its sources
+    proc verilator_fresh {dir} {
+        set record [file join $dir sources.txt]
+        if {![file exists $record]} { return 0 }
+        lassign [::fileutil::cat $record] paths digest
+        return [expr {![catch {verilator_digest $paths} now] && $now eq $digest}]
+    }
+
+    # nvcx::verilate TOP ARGS ?PARAMS?
+    #
+    # The model of Verilog module TOP verilated with ARGS (verilator's: the
+    # sources, -I, -f, and any other options) and the parameters PARAMS (a
+    # list of NAME=VALUE, as for -G), built with nvcx's harness into a
+    # snapshot directory holding verilator.so, for nvcx::write_shell
+    # -snapshot or the bridge. Cached like elaborate's snapshots, keyed by
+    # the arguments, Verilator's version and nvcx's harness, and rebuilt when
+    # the contents of any source it was verilated from change.
+    #
+    # Always --timing: nvcx needs the model's own events (#delays) to visit
+    # their times. Lint warnings are not fatal (-Wno-fatal), since cores are
+    # often third-party RTL.
+    proc verilate {top vargs {params {}}} {
+        variable here
+        set key "verilator|$top|$vargs|[join $params "\n"]|[verilator_version]|[package present nvcx]|[verilator_harness]"
+        set snapshots [file join [workdir] snapshots]
+        set dir [file join $snapshots "$top-vl-[::sha2::sha256 -hex -- $key]"]
+        set so [file join $dir verilator.so]
+        if {[file exists $so] && [verilator_fresh $dir]} { return [file normalize $dir] }
+        file mkdir $snapshots
+        set tmp [::fileutil::maketempdir -prefix "[file tail $dir]." -dir $snapshots]
+        ::fileutil::writeFile [file join $tmp key.txt] $key
+        set obj [file join $tmp obj]
+        set log [file normalize [file join $tmp verilator.log]]
+        set args [list --cc --timing --top-module $top --prefix Vcore -Mdir $obj -Wno-fatal \
+            --exe [file join $here nvcx_verilator_shim.cpp] -o verilator.so \
+            -CFLAGS -fPIC -CFLAGS -I$here \
+            -LDFLAGS -shared -LDFLAGS -Wl,--version-script=[file join $here nvcx_verilator_shim.map]]
+        foreach p $params { lappend args -G$p }
+        lappend args {*}$vargs
+        if {[catch {exec verilator {*}$args >& $log} msg]} {
+            error "verilator failed for $top ($msg); see $log"
+        }
+        verilator_ports [file join $obj Vcore.h] [file join $obj nvcx_ports.h]
+        verilator_threads [file join $obj Vcore.cpp] [file join $obj nvcx_threads.h]
+        set jobs 1
+        catch { set jobs [exec getconf _NPROCESSORS_ONLN] }
+        # The hooks go only into Verilator's runtime (OPT_GLOBAL is its
+        # objects' alone; the harness includes them itself): the model's own
+        # objects use a precompiled header when Verilator splits a large
+        # model, and GCC uses one only if it is the first header included.
+        set hooks "OPT_GLOBAL=-Os -include [file join $here nvcx_verilator_hooks.h]"
+        if {[catch {exec make -C $obj -f Vcore.mk -j$jobs $hooks >>& $log} msg]} {
+            error "building the model of $top failed ($msg); see $log"
+        }
+        file rename [file join $obj verilator.so] [file join $tmp verilator.so]
+        set paths [verilator_sources $obj]
+        ::fileutil::writeFile [file join $tmp sources.txt] [list $paths [verilator_digest $paths]]
+        if {[file exists $dir]} {
+            # stale: its sources changed. Set aside rather than deleted, in
+            # case a simulation has it open
+            catch { file rename $dir "$dir.stale.[file tail $tmp]" }
+        }
+        if {[catch {file rename $tmp $dir}]} {
+            file delete -force $tmp
+            if {![file exists $so]} { error "cannot publish $dir" }
+        }
+        return [file normalize $dir]
     }
 
     # VHDL for the string TEXT, one literal per line joined with LF.
@@ -193,20 +335,31 @@ namespace eval nvcx {
     }
 
     # Write the shell for component *name* to channel *chan*: *what* is
-    # {snapshot DIR} or {library LIB ELAB TABLE} with TABLE a dict generics
-    # text -> snapshot directory; *instances* the list collect built.
+    # {snapshot DIR}, {library LIB ELAB TABLE} or {verilator ARGS TABLE},
+    # with TABLE a dict generics text -> snapshot directory; *instances* the
+    # list collect built.
     proc emit_shell {chan name what instances} {
         lassign [lindex $instances 0] generics ports
         lassign $what kind arg elab table
+        if {$kind eq "verilator"} {
+            set table $elab
+        }
         puts $chan "-- Generated by nvcx.tcl for component $name, from NVC's view of its declaration."
         switch -- $kind {
             snapshot {
-                puts $chan "-- Simulates the xsim snapshot $arg. Its generics were fixed when it was"
-                puts $chan "-- elaborated: the instantiation's values are the defaults here."
+                set backend [expr {[file exists [file join $arg verilator.so]] ? "verilator" : "xsim"}]
+                puts $chan "-- Simulates the $backend snapshot $arg. Its generics were fixed when it"
+                puts $chan "-- was built: the instantiation's values are the defaults here."
             }
             library {
-                puts $chan "-- Generics are chosen at the instantiation point; nvcx.tcl elaborated a"
-                puts $chan "-- snapshot for each set the design uses (xelab $elab)."
+                set backend xsim
+                puts $chan "-- Generics are chosen at the instantiation point; nvcx.tcl elaborated an"
+                puts $chan "-- xsim snapshot for each set the design uses (xelab $elab)."
+            }
+            verilator {
+                set backend verilator
+                puts $chan "-- Generics are chosen at the instantiation point; nvcx.tcl verilated a"
+                puts $chan "-- model for each set the design uses (verilator $arg)."
             }
         }
         puts $chan "library ieee;"
@@ -235,7 +388,7 @@ namespace eval nvcx {
         puts $chan "    );"
         puts $chan "end entity;"
         puts $chan ""
-        puts $chan "architecture xsim of $name is"
+        puts $chan "architecture $backend of $name is"
         if {$kind eq "snapshot"} {
             puts $chan "begin"
             puts $chan "    core : entity nvcx.bridge generic map (SNAPSHOT => \"[file normalize $arg]\");"
@@ -280,6 +433,22 @@ namespace eval nvcx {
         return $tops
     }
 
+    # An instance's generics as Verilator -G values (NAME=VALUE). A string
+    # is quoted, as Verilator expects; a boolean is 1 or 0.
+    proc generic_params {generics} {
+        set params {}
+        foreach g $generics {
+            lassign $g gname gtype gvalue
+            set v [generic_text $gtype $gvalue]
+            switch -- $gtype {
+                string  { set v "\"[string map {\" \\\" \\ \\\\} $v]\"" }
+                boolean { set v [expr {$v ? 1 : 0}] }
+            }
+            lappend params "$gname=$v"
+        }
+        return $params
+    }
+
     # The GENERICS text an instance's values produce at run time.
     proc generics_text {generics} {
         set parts {}
@@ -302,22 +471,25 @@ namespace eval nvcx {
     }
 
     # nvcx::write_shell -component NAME -output FILE
-    #                   (-snapshot DIR | -library LIB ?-elab ARGS?)
+    #                   (-snapshot DIR | -library LIB ?-elab ARGS? | -verilator ARGS)
     #
     # Writes the VHDL shell for the component NAME to FILE and, for -library,
-    # elaborates the snapshot LIB.NAME for every generic set the design
-    # instantiates it with (ARGS to xelab; default "-L LIB"). -snapshot names
-    # a snapshot elaborated already (xsim.dir/NAME), whose generics the
-    # instantiation must leave at their values.
+    # elaborates the xsim snapshot LIB.NAME for every generic set the design
+    # instantiates it with (ARGS to xelab; default "-L LIB"); for -verilator,
+    # verilates Verilog module NAME for every generic set (ARGS to verilator:
+    # the sources and any options; see verilate). -snapshot names a snapshot
+    # built already (xelab -dll's xsim.dir/NAME, or nvcx::verilate's
+    # directory), whose generics the instantiation must leave at their values.
     proc write_shell {args} {
         set options {
             {component.arg "" "the component, as declared in the design"}
             {output.arg    "" "the VHDL shell to write"}
-            {snapshot.arg  "" "a snapshot xelab -dll wrote already (xsim.dir/<name>)"}
-            {library.arg   "" "or: elaborate LIBRARY.<component> for each generic set"}
+            {snapshot.arg  "" "a snapshot built already (xsim.dir/<name>, or nvcx::verilate's)"}
+            {library.arg   "" "or: elaborate LIBRARY.<component> for each generic set (xsim)"}
             {elab.arg      "" "xelab arguments with -library (default: -L LIBRARY)"}
+            {verilator.arg "" "or: verilate <component> for each generic set, with these verilator arguments"}
         }
-        set usage "-component NAME -output FILE (-snapshot DIR | -library LIB ?-elab ARGS?)"
+        set usage "-component NAME -output FILE (-snapshot DIR | -library LIB ?-elab ARGS? | -verilator ARGS)"
         if {[catch {::cmdline::getoptions args $options $usage} result]} {
             error "nvcx::write_shell: $result"
         }
@@ -330,11 +502,12 @@ namespace eval nvcx {
         set snapshot $opt(snapshot)
         set library $opt(library)
         set elab $opt(elab)
+        set verilator $opt(verilator)
         if {$name eq "" || $path eq ""} {
             error "nvcx::write_shell: wants -component NAME and -output FILE"
         }
-        if {($snapshot eq "") == ($library eq "")} {
-            error "nvcx::write_shell $name: wants exactly one of -snapshot DIR or -library LIB"
+        if {($snapshot ne "") + ($library ne "") + ($verilator ne "") != 1} {
+            error "nvcx::write_shell $name: wants exactly one of -snapshot DIR, -library LIB or -verilator ARGS"
         }
         if {$snapshot ne "" && $elab ne ""} {
             error "nvcx::write_shell $name: -elab only applies with -library"
@@ -363,6 +536,21 @@ namespace eval nvcx {
         }
         if {$snapshot ne ""} {
             set what [list snapshot $snapshot]
+        } elseif {$verilator ne ""} {
+            # one model per distinct generic set, cached across runs. The
+            # component's name is the module's: Verilog's case, as the
+            # design declares it, matters
+            set table [dict create]
+            foreach inst $instances {
+                lassign $inst generics ports full
+                set text [generics_text $generics]
+                if {[dict exists $table $text]} continue
+                puts "nvcx: verilating $opt(component) for $full"
+                set dir [verilate $opt(component) $verilator [generic_params $generics]]
+                puts "nvcx:   $dir"
+                dict set table $text $dir
+            }
+            set what [list verilator $verilator $table]
         } else {
             if {$elab eq ""} { set elab "-L $library" }
             # one snapshot per distinct generic set, cached across runs

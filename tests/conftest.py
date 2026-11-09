@@ -12,6 +12,18 @@ ROOT = Path(__file__).resolve().parents[1]
 RTL = ROOT / "tests" / "rtl"
 TB = ROOT / "tests" / "tb"
 
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect the deep XPM tier unless a -m expression names xpm_deep, so that it does not show
+    as a skip on every default run."""
+    if "xpm_deep" in config.getoption("markexpr"):
+        return
+    deep = [item for item in items if item.get_closest_marker("xpm_deep")]
+    if deep:
+        config.hook.pytest_deselected(items=deep)
+        items[:] = [item for item in items if not item.get_closest_marker("xpm_deep")]
+
+
 # The cores under tests/rtl, in VHDL and in Verilog: snapshot name -> (language, source, top entity)
 DESIGNS = {
     "dut": ("vhdl", "dut.vhd", "dut"),
@@ -39,6 +51,9 @@ DESIGNS = {
     "strgen": ("vhdl", "strgen.vhd", "strgen"),
     "strgen_v": ("sv", "strgen.v", "strgen"),
     "kwports_v": ("sv", "kwports.v", "kwports"),
+    # Verilator's delta-cycle concessions (tests/test_verilator.py)
+    "regcomb_v": ("sv", "regcomb.v", "regcomb"),
+    "clkgen_v": ("sv", "clkgen.v", "clkgen"),
 }
 
 
@@ -72,6 +87,48 @@ def nvc():
 def bridge_env(vivado):
     """Environment for the CLI and the plugin: XILINX_VIVADO is all they need."""
     return dict(os.environ)
+
+
+@pytest.fixture(scope="session")
+def verilator():
+    if shutil.which("verilator") is None:
+        pytest.skip("verilator not on PATH")
+    return shutil.which("verilator")
+
+
+@pytest.fixture(scope="session")
+def verilator_env(verilator):
+    """Environment for a run whose cores are all Verilator's: no Vivado needed."""
+    return dict(os.environ)
+
+
+@pytest.fixture(scope="session")
+def verilated(verilator, build, tmp_path_factory):
+    """verilated(name) -> the snapshot directory of that (Verilog) test design's model, built on
+    first use by nvcx::verilate, as nvcx.tcl builds it for a design."""
+    out = tmp_path_factory.mktemp("vl")
+    done = {}
+
+    def verilate(name):
+        if name not in done:
+            lang, source, top = DESIGNS[name]
+            assert lang == "sv", f"{name} is not a Verilog design"
+            script = (
+                "package require nvcx\n"
+                f"puts [nvcx::verilate {top} {{{RTL / source}}}]\n"
+            )
+            r = subprocess.run(
+                ["tclsh"],
+                input=script,
+                env=dict(os.environ, TCLLIBPATH=str(build / "tcl"), NVCX_WORK=str(out)),
+                capture_output=True,
+                text=True,
+            )
+            assert r.returncode == 0, r.stdout + r.stderr
+            done[name] = Path(r.stdout.strip().splitlines()[-1])
+        return done[name]
+
+    return verilate
 
 
 @pytest.fixture(scope="session")

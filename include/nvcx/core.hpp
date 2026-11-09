@@ -15,8 +15,8 @@ namespace nvcx {
 //
 // Time advances in steps the bridge interleaves with NVC's delta cycles. A
 // backend that can pause between delta cycles (xsim) yields at each one; one
-// that cannot (it runs a time step to convergence) never yields, and each
-// start() of zero ticks settles the inputs just written.
+// that cannot (Verilator runs a time slot to convergence) never yields, and
+// each start() of zero ticks settles the inputs just written.
 
 enum class Direction {
     None,
@@ -125,8 +125,9 @@ class Core {
 };
 
 // Open the core a snapshot directory holds, on the backend that built it:
-// xsim's xsimk.so (xelab -dll). Throws std::runtime_error if there is none, or
-// if it cannot be opened.
+// xsim's xsimk.so (xelab -dll), or a verilated model's verilator.so
+// (nvcx::verilate). Throws std::runtime_error if there is none, or if it
+// cannot be opened.
 std::unique_ptr<Core> open_core(const std::filesystem::path& snapshot);
 
 // Verilog values in VlogLogicVal layout, as logic strings (MSB first, as for

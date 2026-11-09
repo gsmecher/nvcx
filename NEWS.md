@@ -1,13 +1,19 @@
 ## Unreleased
 
+- Verilator cores: `nvcx::write_shell -verilator ARGS` verilates a Verilog
+  module (once per generic set) and the bridge simulates it alongside xsim
+  cores and NVC's own (`src/verilator`, `nvcx::verilate`). Models are 2-state
+  and settle a time slot at once, so a Verilator core must not drive a clock
+  NVC uses (README, `man nvcx`). `tests/test_verilator.py` runs without
+  Vivado.
 - The bridge reaches cores through a backend-neutral interface
   (`nvcx::Core`, `include/nvcx/core.hpp`); xsim (`src/xsim/`) is one
   backend, chosen by what a snapshot directory holds. No change in
   behaviour.
 - Releases carry a Verilator package (5.054+git202611072109.74cf7aa-1+nvcx2,
   from `contrib/verilator`: Debian's packaging, an upstream snapshot, and
-  the patches nvcx needs), for the Verilator backend to come. nvcx's
-  package depends on it, and the Docker image installs it.
+  the patches nvcx needs). nvcx's package depends on it, and the Docker
+  image installs it.
 
 ## Version 0.2.0 - 2026-10-26
 

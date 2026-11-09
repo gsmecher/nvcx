@@ -39,9 +39,42 @@ If you're curious, try "hello":
   simulation kernel and xsim for the "mop-up" terminal IPs, I can make use of
   VHPI, PSL, FST/VCD, cocotb, et cetera.
 
+## Verilator
+
+nvcx can also put Verilog and SystemVerilog cores on
+[Verilator](https://www.veripool.org/verilator/), for speed. Cores of either
+kind, and NVC's own, share one simulation:
+
+    package require nvcx
+    nvcx::write_shell -component fft -output fft_shell.vhd \
+        -verilator {-f fft.f -O3}
+
+`-verilator` verilates the module once per generic set the design uses
+(`nvcx::verilate`), with nvcx's small harness, into a model cached under
+`nvcx.work` like xsim's snapshots. See `man nvcx` for the details.
+
+Verilator's models are 2-state (X and Z inputs read as 0), and Verilator
+evaluates a whole time slot at once rather than a delta at a time, so a
+Verilator core keeps less of its delta ordering than an xsim core:
+
+* each NVC delta that changes its inputs, and each of its own events, gets one
+  evaluation, and every output it changes then changes in the same NVC delta
+  (a combinational output derived from a registered one changes with it, not
+  a delta later);
+* so **a Verilator core must not drive a clock NVC uses**: the clock and data
+  registered on it inside the core change in the same NVC delta, and a
+  register in NVC clocked by that clock samples the data after its update.
+  Generate such clocks in NVC, or in an xsim core.
+
+Clocks into a Verilator core, and its outputs sampled on them, behave as in a
+single simulator. `tests/test_verilator.py` pins both concessions down.
+
+nvcx releases carry a Verilator package (`contrib/verilator`): a recent
+release, with fixes nvcx needs that are not yet upstream.
+
 ## Timing
 
-NVC and each xsim cores advance in lockstep. The plugin pauses the xsim kernel
+NVC and each xsim core advance in lockstep. The plugin pauses the xsim kernel
 at every delta boundary (a hook on the kernel's signal-update phase, with the
 kernel running on a coroutine), writes the inputs NVC changed in its delta,
 lets the kernel run one delta, and deposits the outputs that changed for NVC's
@@ -82,8 +115,11 @@ contains a few patches not yet upstreamed.  For Ubuntu 24.04:
     $ sudo apt install ./nvc_1.23.0-1+nvcx1_amd64_ubuntu-24.04.deb \
                        ./nvcx_0.2.0-1_amd64_ubuntu-24.04.deb
 
-Substitute `debian-13` or `ubuntu-26.04` as appropriate. Vivado is needed at
-run time, located via `XILINX_VIVADO`, and is not packaged.
+Substitute `debian-13` or `ubuntu-26.04` as appropriate. Releases after 0.2.0
+also carry a Verilator package
+(`verilator_5.054+git202611072109.74cf7aa-1+nvcx2_...deb`), which nvcx's
+depends on: install it alongside. Vivado is needed at run time for xsim
+cores, located via `XILINX_VIVADO`, and is not packaged.
 
 ### From source
 
@@ -95,8 +131,11 @@ You need:
   (`nvc.pc`, from `0005-nvc-pkg-config.patch`),
 * CMake 3.24 or later, and pkg-config,
 * a C++20 compiler,
-* Boost.Context, and
-* Vivado at run time, located via `XILINX_VIVADO`.
+* Boost.Context,
+* Vivado at run time, for xsim cores, located via `XILINX_VIVADO`, and
+* Verilator 5.054 or later at run time, for Verilator cores, with make and a
+  C++ compiler (the package from `contrib/verilator` carries fixes nvcx
+  needs).
 
 Then:
 

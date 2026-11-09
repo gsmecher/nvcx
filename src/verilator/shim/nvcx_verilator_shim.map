@@ -1,0 +1,7 @@
+/* A verilated model's .so exports only the shim's entry point: its Verilator
+   runtime stays private to it, so that models built with different releases
+   or options can share a process */
+{
+    global: nvcx_verilator_api;
+    local: *;
+};

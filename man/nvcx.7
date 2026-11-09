@@ -1,9 +1,9 @@
-.Dd October 26, 2026
+.Dd November 6, 2026
 .Dt NVCX 7
 .Os
 .Sh NAME
 .Nm nvcx
-.Nd simulate AMD/Xilinx xsim cores inside the NVC VHDL simulator
+.Nd simulate xsim and Verilator cores inside the NVC VHDL simulator
 .\" ------------------------------------------------------------
 .\" Synopsis
 .\" ------------------------------------------------------------
@@ -29,18 +29,22 @@
 .Bd -literal -offset indent
 package require nvcx
 nvcx::write_shell -component name -output file \e
-    (-snapshot dir | -library lib ?-elab args?)
+    (-snapshot dir | -library lib ?-elab args? | -verilator args)
+nvcx::verilate top args ?params?
 .Ed
 .\" ------------------------------------------------------------
 .\" Description
 .\" ------------------------------------------------------------
 .Sh DESCRIPTION
 .Nm
-embeds the AMD/Xilinx xsim simulator inside
+embeds other simulators inside
 .Xr nvc 1 ,
-so that cores NVC cannot simulate itself (IEEE 1735 encrypted IP, XPM
-macros, and SystemVerilog beyond NVC's current support) can be part of an
-otherwise ordinary NVC simulation.
+so that cores NVC cannot simulate itself can be part of an otherwise
+ordinary NVC simulation: the AMD/Xilinx xsim simulator, for IEEE 1735
+encrypted IP, XPM macros and SystemVerilog beyond NVC's current support,
+and
+.Xr verilator 1 ,
+for Verilog and SystemVerilog cores at Verilator's speed.
 .Pp
 Each such core is declared as a VHDL component in the design and left
 unbound.
@@ -52,8 +56,8 @@ the
 .Li nvcx.bridge
 entity.
 The bridge is bound, through a VHPI foreign attribute, to a plugin that
-loads xsim's simulation kernel and the core's xsim snapshot, and exchanges
-port values with NVC.
+loads the core's model (an xsim snapshot, run by xsim's simulation kernel,
+or a verilated model) and exchanges port values with NVC.
 NVC simulates the rest of the design, which is free to use VHPI, PSL,
 waveform dumping and the like as usual.
 .Pp
@@ -73,7 +77,7 @@ whose
 .Ic nvcx::write_shell
 command, run under
 .Nm nvc Fl Fl do ,
-writes each core's shell and elaborates its snapshot;
+writes each core's shell and builds its model;
 .It
 a VHPI plugin,
 .Pa libnvcx.so ,
@@ -143,7 +147,7 @@ generics change.
 .Ic nvcx::write_shell
 .Fl component Ar name
 .Fl output Ar file
-.Pq Fl snapshot Ar dir | Fl library Ar lib Op Fl elab Ar args
+.Pq Fl snapshot Ar dir | Fl library Ar lib Op Fl elab Ar args | Fl verilator Ar args
 .Xc
 Write the VHDL shell for the component
 .Ar name
@@ -157,20 +161,25 @@ interface.
 It is an error if the elaborated design instantiates no component of that
 name; the message lists the components it does instantiate.
 Exactly one of
-.Fl snapshot
-and
+.Fl snapshot ,
 .Fl library
+and
+.Fl verilator
 must be given.
 .Bl -tag -width Ds
 .It Fl snapshot Ar dir
-Use a snapshot elaborated already by
+Use a model built already: an xsim snapshot elaborated by
 .Ql xelab -dll ,
 for example by a script from Vivado's
-.Ic export_simulation .
-.Ar dir
-is the snapshot's directory,
-.Pa xsim.dir/ Ns Ar name .
-The core's generics were fixed when it was elaborated; the shell declares
+.Ic export_simulation ,
+whose directory
+.Pa xsim.dir/ Ns Ar name
+is
+.Ar dir ;
+or a verilated model's directory, as
+.Ic nvcx::verilate
+returns it.
+The core's generics were fixed when it was built; the shell declares
 them with the instantiation's values as defaults, and every instance must
 leave them at those values.
 .It Fl library Ar lib
@@ -195,7 +204,65 @@ only: the arguments to pass to
 as a Tcl list.
 The default is
 .Ql -L Ar lib .
+.It Fl verilator Ar args
+Verilate the Verilog module
+.Ar name
+(in the case given here, since Verilog names are case-sensitive) with
+.Ic nvcx::verilate ,
+once for each distinct set of generic values the design instantiates the
+component with, passing them as
+.Fl G .
+.Ar args
+are
+.Xr verilator 1 Ns 's
+arguments, as a Tcl list: the sources, and options such as
+.Fl I
+or
+.Fl f .
+The shell selects the matching model at run time, as for
+.Fl library .
 .El
+.It Ic nvcx::verilate Ar top Ar args Op Ar params
+Build the model of Verilog module
+.Ar top ,
+verilated with
+.Ar args
+(as for
+.Fl verilator )
+and the parameters
+.Ar params ,
+a list of
+.Ar NAME Ns = Ns Ar VALUE
+as
+.Xr verilator 1 Ns 's
+.Fl G
+takes them, and return its directory, for
+.Fl snapshot .
+Models are cached like snapshots (see
+.Sx FILES ) ,
+keyed by the arguments and Verilator's version, and rebuilt when the
+contents of any source the model was verilated from change (every file
+Verilator read: those found through
+.Fl y
+and
+.Ql `include
+too).
+.Pp
+The model is verilated with
+.Fl Fl timing ,
+which
+.Nm
+needs to visit the times of the model's own events, and
+.Fl Wno-fatal ,
+since cores are often third-party code; other options, optimization flags
+among them, can be given in
+.Ar args .
+It is compiled with a small harness that
+.Nm
+provides, into
+.Pa verilator.so ,
+which carries its own copy of Verilator's runtime: models built by
+different Verilator releases can share a simulation.
 .El
 .\" ------------------------------------------------------------
 .\" Interfaces
@@ -228,7 +295,26 @@ A port of a Verilog or SystemVerilog core must be a
 .Li std_logic
 or
 .Li bit
-scalar or array; four-state values pass through.
+scalar or array.
+Four-state values pass through xsim.
+Verilator's models are two-state: an input bit that is
+.Ql X ,
+.Ql Z ,
+.Ql U ,
+.Ql W
+or
+.Ql -
+reads as 0
+.Po
+.Ql H
+as 1,
+.Ql L
+as 0
+.Pc ,
+and outputs are only ever 0 or 1.
+A Verilator core's ports must be integral: no
+.Li real
+ports.
 .Pp
 Generics must be of type
 .Li integer ,
@@ -238,6 +324,8 @@ or
 .Li boolean .
 Generic names are passed to
 .Ic xelab
+and
+.Xr verilator 1
 as declared, since Verilog parameter names are case-sensitive.
 .Pp
 Other components the design instantiates (a bound UNISIM primitive, for
@@ -248,18 +336,46 @@ are checked.
 .\" Timing
 .\" ------------------------------------------------------------
 .Sh TIMING
-NVC and the xsim kernel advance in lockstep, one delta cycle at a time.
+NVC and an xsim core advance in lockstep, one delta cycle at a time.
 At each delta, inputs NVC changed are written to the kernel, the kernel
 runs one delta, and the outputs that changed are deposited for NVC's next
 delta.
 Each side therefore sees the other's assignments one delta after they were
 made, as it would in a single simulator.
 .Pp
-Every NVC time at which the core runs must be a whole number of the
-kernel's time precision; elaborate the core with a finer precision if
+All xsim instances share one kernel.
+.Pp
+Verilator evaluates a time slot to convergence in one step, and cannot
+stop between its delta cycles.
+A Verilator core is evaluated once for each NVC delta that changes its
+inputs, and at the times of its own events; the outputs that changed are
+deposited for NVC's next delta.
+So each side still sees the other's assignments a delta after they were
+made, and nothing changes across a time step, but within a time slot the
+core's own delta ordering is lost: every output it changes in response to
+one input change, or at one of its own events, changes in the same NVC
+delta.
+In particular,
+.Bl -bullet
+.It
+a combinational output derived from a registered one changes with it, not
+a delta later;
+.It
+a Verilator core must not drive a clock that NVC uses.
+A clock output and data registered on it inside the core change in the
+same NVC delta, so a register in NVC clocked by that clock samples the
+data after its update, not before.
+An xsim core, or NVC itself, can generate such a clock.
+.El
+.Pp
+Logic that samples a Verilator core's outputs on a clock of NVC's (or one
+the core receives) is unaffected, as are the values every output settles
+to in each time step.
+.Pp
+Every NVC time at which a core runs must be a whole number of its time
+precision; build the core with a finer precision if
 .Nm
 reports otherwise.
-All instances share one kernel.
 .Pp
 Reports and assertions from a core become NVC assertions of the same
 severity, prefixed with the shell's instance name, so
@@ -275,11 +391,18 @@ The Vivado installation whose simulator kernel and
 .Ic xelab
 are used, as set by Vivado's
 .Pa settings64.sh .
-Required.
+Required for xsim cores.
 A snapshot can only be simulated by the Vivado release that elaborated it;
 .Nm
 refuses a mismatch.
 Vivado 2023.2 or later is required.
+.It Ev PATH
+.Ic nvcx::verilate
+runs the
+.Xr verilator 1
+and
+.Xr make 1
+it finds here.
 .It Ev NVCX_WORK
 Directory holding the snapshot cache.
 The default is
@@ -314,7 +437,10 @@ It is instantiated only by generated shells.
 The directory holding the
 .Li nvcx
 Tcl package
-.Pq Ql pkg-config --variable=tcldir nvcx .
+.Pq Ql pkg-config --variable=tcldir nvcx ,
+and the harness
+.Ic nvcx::verilate
+compiles with each model.
 .It Pa /usr/lib/pkgconfig/nvcx.pc
 The
 .Xr pkg-config 1
@@ -325,12 +451,23 @@ Snapshots elaborated by
 one directory per core and set of generics, keyed by the library, the
 entity, the
 .Ic xelab
-arguments, the generic values and the Vivado release.
-Each holds the
+arguments, the generic values and the Vivado release, each holding the
 .Ic xelab
 log,
-.Pa xelab.log .
-It is safe to delete; snapshots are elaborated again as needed.
+.Pa xelab.log ;
+and models built by
+.Ic nvcx::verilate ,
+keyed by the module, the
+.Xr verilator 1
+arguments, the parameters and Verilator's version, each holding its
+.Pa verilator.so ,
+the build's log,
+.Pa verilator.log ,
+and the digests of its sources,
+.Pa sources.txt .
+A model whose sources changed is rebuilt, and the old one set aside as
+.Pa *.stale.* .
+It is safe to delete; they are built again as needed.
 .El
 .\" ------------------------------------------------------------
 .\" Diagnostics
@@ -380,7 +517,8 @@ directory of the source distribution contains the complete example.
 .\" ------------------------------------------------------------
 .Sh SEE ALSO
 .Xr nvc 1 ,
-.Xr pkg-config 1
+.Xr pkg-config 1 ,
+.Xr verilator 1
 .Pp
 .Rs
 .%T Vivado Design Suite User Guide: Logic Simulation
@@ -403,6 +541,12 @@ needs NVC built with Tcl support and carrying the patches in the source
 distribution's
 .Pa contrib
 directory, until an NVC release includes them.
+.Pp
+.Nm
+depends on the Verilator package its releases carry (the source
+distribution's
+.Pa contrib/verilator ) :
+a recent release, with fixes not yet upstream.
 .Pp
 .Nm
 is not affiliated with NVC.

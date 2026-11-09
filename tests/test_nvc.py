@@ -13,8 +13,13 @@ TB = ROOT / "tests" / "tb"
 class Core:
     name: str
     design: str
-    library: str | None = None
+    library: str | None = None  # xsim: elaborate per generic set, in this library
     ports: list = field(default_factory=list)  # twin.Port, for a twin
+    backend: str = "xsim"  # or "verilator"
+    per_generics: bool = False  # verilator: verilate per generic set (-verilator)
+    vargs: list[str] = field(
+        default_factory=list
+    )  # ...with these verilator options too
 
 
 @dataclass
@@ -34,6 +39,9 @@ class Case:
     expect_absent: list[str] = field(
         default_factory=list
     )  # texts the run's output must not have
+    expect_once: list[str] = field(
+        default_factory=list
+    )  # texts the run's output must have exactly once
     tcl_expect: list[str] = field(default_factory=list)  # texts nvcx.tcl must print
     before_run: object = (
         None  # before_run(tmp_path): tamper between nvcx.tcl and the run
@@ -167,17 +175,19 @@ CASES = {
 }
 
 
-def run_case(case, nvc, build, bridge_env, designs, tmp_path):
+def run_case(case, nvc, build, bridge_env, designs, tmp_path, verilated=None):
     """Run one Case through the bridge: the two NVC passes, nvcx.tcl between
-    them, and the run itself, checking what the Case says to check."""
-    run = prepare_case(case, nvc, build, bridge_env, designs, tmp_path)
+    them, and the run itself, checking what the Case says to check. designs
+    and verilated give the cores' xsim and Verilator snapshots by design name
+    (conftest.py); a Case needs only those of the backends it uses."""
+    run = prepare_case(case, nvc, build, bridge_env, designs, tmp_path, verilated)
     r = run(case.elab_args)
     if case.check:
         case.check(tmp_path, r)
     return r
 
 
-def prepare_case(case, nvc, build, bridge_env, designs, tmp_path):
+def prepare_case(case, nvc, build, bridge_env, designs, tmp_path, verilated=None):
     """Everything up to the run: the two NVC passes and nvcx.tcl between
     them. Returns run(elab_args), which elaborates the top with those
     arguments (its generics, say) and runs it, checking what the Case says
@@ -190,15 +200,23 @@ def prepare_case(case, nvc, build, bridge_env, designs, tmp_path):
     def shell(c):
         return twin.shell_name(c.name) if case.twin else c.name
 
-    env["PATH"] = f"{Path(env['XILINX_VIVADO']) / 'bin'}:{env['PATH']}"
+    if env.get("XILINX_VIVADO"):
+        env["PATH"] = f"{Path(env['XILINX_VIVADO']) / 'bin'}:{env['PATH']}"
 
-    # the design's NVC-side script: what xsim provides for each core
+    # the design's NVC-side script: what xsim or Verilator provides for each core
     calls = ["package require nvcx"]
     for c in case.cores:
-        if c.library is None:
+        if c.backend == "verilator" and c.per_generics:
+            _, source, _ = DESIGNS[c.design]
             calls.append(
                 f"nvcx::write_shell -component {shell(c)} -output {tmp_path / shell(c)}_shell.vhd"
-                f" -snapshot {designs(c.design)}"
+                f" -verilator {{{' '.join([str(RTL / source), *c.vargs])}}}"
+            )
+        elif c.library is None:
+            snapshots = verilated if c.backend == "verilator" else designs
+            calls.append(
+                f"nvcx::write_shell -component {shell(c)} -output {tmp_path / shell(c)}_shell.vhd"
+                f" -snapshot {snapshots(c.design)}"
             )
         else:
             lang, source, _ = DESIGNS[c.design]
@@ -295,6 +313,8 @@ def prepare_case(case, nvc, build, bridge_env, designs, tmp_path):
                 pos += len(text)
             for text in case.expect_absent:
                 assert text not in out, (text, out)
+            for text in case.expect_once:
+                assert out.count(text) == 1, (text, out)
             return r
         assert r.returncode == 0 and "PASS" in out, out
         r.rerun = lambda: run(elab_args)
