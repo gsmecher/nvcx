@@ -1,4 +1,4 @@
-## Unreleased
+## Version 0.3.0 - 2026-11-08
 
 - Verilator cores: `nvcx::write_shell -verilator ARGS` verilates a Verilog
   module (once per generic set) and the bridge simulates it alongside xsim

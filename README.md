@@ -109,17 +109,19 @@ Each [release](https://github.com/gsmecher/nvcx/releases) carries packages for
 Debian and Ubuntu. The NVC package replaces NVC's own package of 1.23, which
 contains a few patches not yet upstreamed.  For Ubuntu 24.04:
 
-    $ R=https://github.com/gsmecher/nvcx/releases/download/v0.2.0
+    $ R=https://github.com/gsmecher/nvcx/releases/download/v0.3.0
+    $ V=5.054+git202611072109.74cf7aa-1+nvcx2
     $ wget $R/nvc_1.23.0-1+nvcx1_amd64_ubuntu-24.04.deb \
-           $R/nvcx_0.2.0-1_amd64_ubuntu-24.04.deb
+           $R/verilator_${V}_amd64_ubuntu-24.04.deb \
+           $R/nvcx_0.3.0-1_amd64_ubuntu-24.04.deb
     $ sudo apt install ./nvc_1.23.0-1+nvcx1_amd64_ubuntu-24.04.deb \
-                       ./nvcx_0.2.0-1_amd64_ubuntu-24.04.deb
+                       ./verilator_${V}_amd64_ubuntu-24.04.deb \
+                       ./nvcx_0.3.0-1_amd64_ubuntu-24.04.deb
 
-Substitute `debian-13` or `ubuntu-26.04` as appropriate. Releases after 0.2.0
-also carry a Verilator package
-(`verilator_5.054+git202611072109.74cf7aa-1+nvcx2_...deb`), which nvcx's
-depends on: install it alongside. Vivado is needed at run time for xsim
-cores, located via `XILINX_VIVADO`, and is not packaged.
+Substitute `debian-13` or `ubuntu-26.04` as appropriate. The Verilator
+package, which nvcx's depends on, is a recent Verilator with fixes nvcx
+needs (`contrib/verilator`). Vivado is needed at run time for xsim cores,
+located via `XILINX_VIVADO`, and is not packaged.
 
 ### From source
 
