@@ -176,6 +176,7 @@ Simulation::Simulation(const std::string& design_so)
             g_live.erase(this);
         }
         if (handle_) {
+            Current current(this); // its finalization has deltas (the hook)
             kernel_->xsi_close(handle_);
             kernel_->current = nullptr;
         }

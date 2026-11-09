@@ -46,9 +46,11 @@ static void resolve(void* h,
                     const char* expect_demangled = nullptr) {
     dlerror();
     void* p = dlsym(h, sym);
-    if (!p)
-        throw std::runtime_error(std::format(
-            "kernel symbol missing: {}: {}", sym, dlerror() ? dlerror() : "?"));
+    if (!p) {
+        const char* why = dlerror(); // (a second call would return null)
+        throw std::runtime_error(
+            std::format("kernel symbol missing: {}: {}", sym, why ? why : "?"));
+    }
     if (expect_demangled) {
         int st = 0;
         char* d = ::abi::__cxa_demangle(sym, nullptr, nullptr, &st);
